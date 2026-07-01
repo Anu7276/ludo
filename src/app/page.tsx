@@ -1,31 +1,19 @@
-'use client'
+'use client';
+
+import { useLudoStore } from '@/stores/ludo-store';
+import GameLobby from '@/components/ludo/GameLobby';
+import GameView from '@/components/ludo/GameView';
+import { Toaster } from '@/components/ui/sonner';
 
 export default function Home() {
+  const showLobby = useLudoStore(s => s.showLobby);
+  const showGame = useLudoStore(s => s.showGame);
+
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      minHeight: '100vh',
-      gap: '2rem',
-      padding: '1rem'
-    }}>
-      <div style={{
-        position: 'relative',
-        width: '6rem',
-        height: '6rem'
-      }}>
-        <img
-          src="/logo.svg"
-          alt="Z.ai Logo"
-          style={{
-            width: '100%',
-            height: '100%',
-            objectFit: 'contain'
-          }}
-        />
-      </div>
-    </div>
-  )
+    <>
+      <Toaster position="top-center" richColors />
+      {showLobby && <GameLobby />}
+      {showGame && <GameView />}
+    </>
+  );
 }

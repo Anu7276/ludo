@@ -113,7 +113,16 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
 
   connect: () => {
     const existing = get().socket;
-    if (existing && existing.connected) return;
+    // Prevent duplicate connections
+    if (existing) {
+      // If socket exists but disconnected, remove it
+      if (!existing.connected) {
+        existing.removeAllListeners();
+        existing.disconnect();
+      } else {
+        return; // Already connected
+      }
+    }
 
     const socket = io('/?XTransformPort=3003', {
       transports: ['websocket', 'polling'],
@@ -122,22 +131,12 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
       reconnectionDelay: 1000,
     });
 
+    // Store socket immediately to prevent duplicate creation
+    set({ socket });
+
     socket.on('connect', () => {
-      console.log('[Ludo] Connected to server');
+      console.log('[Ludo] Connected to server, id=', socket.id);
       set({ connected: true, playerId: socket.id || '' });
-      
-      // Try to reconnect to existing room
-      const { roomId, playerId: oldPlayerId } = get();
-      if (roomId && oldPlayerId) {
-        socket.emit('room:reconnect', { roomId, playerId: oldPlayerId }, (response: any) => {
-          if (response?.success) {
-            set({ 
-              gameState: response.gameState,
-              gamePhase: response.gameState.phase,
-            });
-          }
-        });
-      }
     });
 
     socket.on('disconnect', () => {

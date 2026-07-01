@@ -585,6 +585,7 @@ io.on('connection', (socket) => {
     }
     
     const diceValue = rollDice(state);
+    console.log(`[Ludo] ${currentPlayer.name} rolled ${diceValue}`);
     
     callback({ success: true, value: diceValue });
     io.to(info.roomId).emit('dice:rolled', {

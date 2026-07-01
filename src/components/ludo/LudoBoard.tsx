@@ -333,13 +333,14 @@ export default function LudoBoard({
       >
         {/* ── Cell grid layer (static board) ──────────────────────────── */}
         <div
-          className="absolute inset-0"
+          className="absolute inset-0 pointer-events-none"
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(15, 1fr)',
             gridTemplateRows: 'repeat(15, 1fr)',
             gap: '1px',
             background: '#9ca3af',
+            zIndex: 1,
           }}
         >
           {cells}
@@ -351,6 +352,7 @@ export default function LudoBoard({
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(15, 1fr)',
+            zIndex: 2,
             gridTemplateRows: 'repeat(15, 1fr)',
             gap: '1px',
           }}
