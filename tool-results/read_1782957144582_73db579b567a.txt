@@ -1,0 +1,841 @@
+     1→import { Server } from 'socket.io';
+     2→import { v4 as uuidv4 } from 'uuid';
+     3→
+     4→// ============ GAME LOGIC (inlined for the mini-service) ============
+     5→
+     6→type PlayerColor = 'red' | 'green' | 'yellow' | 'blue';
+     7→type PieceState = 'home' | 'active' | 'finished';
+     8→type GamePhase = 'waiting' | 'playing' | 'finished';
+     9→
+    10→interface Piece {
+    11→  id: string;
+    12→  color: PlayerColor;
+    13→  index: number;
+    14→  state: PieceState;
+    15→  steps: number;
+    16→}
+    17→
+    18→interface Player {
+    19→  id: string;
+    20→  name: string;
+    21→  color: PlayerColor;
+    22→  pieces: Piece[];
+    23→  isConnected: boolean;
+    24→  isBot: boolean;
+    25→}
+    26→
+    27→interface GameState {
+    28→  roomId: string;
+    29→  phase: GamePhase;
+    30→  players: Player[];
+    31→  currentPlayerIndex: number;
+    32→  diceValue: number | null;
+    33→  diceRolled: boolean;
+    34→  consecutiveSixes: number;
+    35→  winner: PlayerColor | null;
+    36→  turnHistory: any[];
+    37→  createdAt: number;
+    38→}
+    39→
+    40→interface RoomInfo {
+    41→  id: string;
+    42→  name: string;
+    43→  code: string;
+    44→  hostId: string;
+    45→  maxPlayers: number;
+    46→  playerCount: number;
+    47→  status: GamePhase;
+    48→  createdAt: number;
+    49→}
+    50→
+    51→const PLAYER_COLORS: PlayerColor[] = ['red', 'green', 'yellow', 'blue'];
+    52→
+    53→const MAIN_PATH: [number, number][] = [
+    54→  [6, 1], [6, 2], [6, 3], [6, 4], [6, 5],
+    55→  [5, 6], [4, 6], [3, 6], [2, 6], [1, 6], [0, 6],
+    56→  [0, 7],
+    57→  [0, 8], [1, 8], [2, 8], [3, 8], [4, 8], [5, 8],
+    58→  [6, 9], [6, 10], [6, 11], [6, 12], [6, 13], [6, 14],
+    59→  [7, 14],
+    60→  [8, 14], [8, 13], [8, 12], [8, 11], [8, 10], [8, 9],
+    61→  [9, 8], [10, 8], [11, 8], [12, 8], [13, 8], [14, 8],
+    62→  [14, 7],
+    63→  [14, 6], [13, 6], [12, 6], [11, 6], [10, 6], [9, 6],
+    64→  [8, 5], [8, 4], [8, 3], [8, 2], [8, 1],
+    65→  [7, 0],
+    66→  [6, 0],
+    67→];
+    68→
+    69→const PLAYER_START_INDEX: Record<PlayerColor, number> = {
+    70→  red: 0, green: 13, yellow: 26, blue: 39,
+    71→};
+    72→
+    73→const SAFE_ZONE_INDICES = new Set([0, 8, 13, 21, 26, 34, 39, 47]);
+    74→
+    75→function getMainPathIndex(color: PlayerColor, steps: number): number {
+    76→  if (steps < 1 || steps > 51) return -1;
+    77→  return (PLAYER_START_INDEX[color] + steps - 1) % 52;
+    78→}
+    79→
+    80→function isSafeZone(pathIndex: number): boolean {
+    81→  return SAFE_ZONE_INDICES.has(pathIndex);
+    82→}
+    83→
+    84→function createPiece(color: PlayerColor, index: number): Piece {
+    85→  return { id: uuidv4(), color, index, state: 'home', steps: 0 };
+    86→}
+    87→
+    88→function createPlayer(id: string, name: string, color: PlayerColor, isBot: boolean = false): Player {
+    89→  return {
+    90→    id, name, color, isBot, isConnected: true,
+    91→    pieces: [createPiece(color, 0), createPiece(color, 1), createPiece(color, 2), createPiece(color, 3)],
+    92→  };
+    93→}
+    94→
+    95→function createGameState(roomId: string): GameState {
+    96→  return {
+    97→    roomId, phase: 'waiting', players: [], currentPlayerIndex: 0,
+    98→    diceValue: null, diceRolled: false, consecutiveSixes: 0,
+    99→    winner: null, turnHistory: [], createdAt: Date.now(),
+   100→  };
+   101→}
+   102→
+   103→function rollDice(state: GameState): number {
+   104→  const value = Math.floor(Math.random() * 6) + 1;
+   105→  state.diceValue = value;
+   106→  state.diceRolled = true;
+   107→  state.consecutiveSixes = value === 6 ? state.consecutiveSixes + 1 : 0;
+   108→  return value;
+   109→}
+   110→
+   111→function canMovePiece(state: GameState, playerIndex: number, pieceIndex: number, diceValue: number): boolean {
+   112→  const player = state.players[playerIndex];
+   113→  if (!player) return false;
+   114→  const piece = player.pieces[pieceIndex];
+   115→  if (!piece || piece.state === 'finished') return false;
+   116→  if (piece.state === 'home') return diceValue === 6;
+   117→  const newSteps = piece.steps + diceValue;
+   118→  if (newSteps > 57) return false;
+   119→  if (newSteps >= 52 && newSteps <= 56) {
+   120→    if (player.pieces.some(p => p.index !== pieceIndex && p.steps === newSteps && p.state === 'active')) return false;
+   121→  }
+   122→  if (newSteps >= 1 && newSteps <= 51) {
+   123→    const destPathIndex = getMainPathIndex(player.color, newSteps);
+   124→    if (player.pieces.some(p => {
+   125→      if (p.index === pieceIndex || p.state !== 'active') return false;
+   126→      if (p.steps < 1 || p.steps > 51) return false;
+   127→      return getMainPathIndex(player.color, p.steps) === destPathIndex;
+   128→    })) return false;
+   129→  }
+   130→  return true;
+   131→}
+   132→
+   133→function getValidMoves(state: GameState, playerIndex: number, diceValue: number): number[] {
+   134→  const moves: number[] = [];
+   135→  for (let i = 0; i < 4; i++) {
+   136→    if (canMovePiece(state, playerIndex, i, diceValue)) moves.push(i);
+   137→  }
+   138→  return moves;
+   139→}
+   140→
+   141→function checkAndCapture(state: GameState, movingPlayer: Player, movingPiece: Piece): { color: PlayerColor; pieceIndex: number } | null {
+   142→  if (movingPiece.steps < 1 || movingPiece.steps > 51) return null;
+   143→  const pathIndex = getMainPathIndex(movingPlayer.color, movingPiece.steps);
+   144→  if (isSafeZone(pathIndex)) return null;
+   145→  for (const opponent of state.players) {
+   146→    if (opponent.color === movingPlayer.color) continue;
+   147→    for (const piece of opponent.pieces) {
+   148→      if (piece.state !== 'active' || piece.steps < 1 || piece.steps > 51) continue;
+   149→      if (getMainPathIndex(opponent.color, piece.steps) === pathIndex) {
+   150→        piece.state = 'home';
+   151→        piece.steps = 0;
+   152→        return { color: opponent.color, pieceIndex: piece.index };
+   153→      }
+   154→    }
+   155→  }
+   156→  return null;
+   157→}
+   158→
+   159→function executeMove(state: GameState, playerIndex: number, pieceIndex: number, diceValue: number): any {
+   160→  const player = state.players[playerIndex];
+   161→  if (!player) return { success: false, pieceIndex, fromSteps: 0, toSteps: 0, reason: 'Player not found' };
+   162→  const piece = player.pieces[pieceIndex];
+   163→  if (!piece) return { success: false, pieceIndex, fromSteps: 0, toSteps: 0, reason: 'Piece not found' };
+   164→  const fromSteps = piece.steps;
+   165→
+   166→  if (piece.state === 'home') {
+   167→    if (diceValue !== 6) return { success: false, pieceIndex, fromSteps, toSteps: fromSteps, reason: 'Need 6' };
+   168→    if (player.pieces.some(p => p.index !== pieceIndex && p.state === 'active' && p.steps === 1)) {
+   169→      return { success: false, pieceIndex, fromSteps, toSteps: fromSteps, reason: 'Blocked' };
+   170→    }
+   171→    piece.state = 'active';
+   172→    piece.steps = 1;
+   173→    const captured = checkAndCapture(state, player, piece);
+   174→    return { success: true, pieceIndex, fromSteps: 0, toSteps: 1, captured, enteredBoard: true, extraTurn: true };
+   175→  }
+   176→
+   177→  const newSteps = piece.steps + diceValue;
+   178→  if (newSteps > 57) return { success: false, pieceIndex, fromSteps, toSteps: fromSteps, reason: 'Exceeds home' };
+   179→
+   180→  piece.steps = newSteps;
+   181→
+   182→  if (newSteps === 57) {
+   183→    piece.state = 'finished';
+   184→    if (player.pieces.every(p => p.state === 'finished')) {
+   185→      state.winner = player.color;
+   186→      state.phase = 'finished';
+   187→    }
+   188→    return { success: true, pieceIndex, fromSteps, toSteps: newSteps, reachedHome: true, extraTurn: diceValue === 6 };
+   189→  }
+   190→
+   191→  let captured = null;
+   192→  if (newSteps >= 1 && newSteps <= 51) {
+   193→    captured = checkAndCapture(state, player, piece);
+   194→  }
+   195→  return { success: true, pieceIndex, fromSteps, toSteps: newSteps, captured, extraTurn: diceValue === 6 };
+   196→}
+   197→
+   198→function nextTurn(state: GameState, hadExtraTurn: boolean = false): void {
+   199→  if (state.phase === 'finished') return;
+   200→  if (hadExtraTurn && state.consecutiveSixes < 3) {
+   201→    state.diceValue = null;
+   202→    state.diceRolled = false;
+   203→    return;
+   204→  }
+   205→  if (state.consecutiveSixes >= 3) {
+   206→    const player = state.players[state.currentPlayerIndex];
+   207→    if (player) {
+   208→      const lastRecord = state.turnHistory[state.turnHistory.length - 1];
+   209→      if (lastRecord && lastRecord.playerId === player.id) {
+   210→        const piece = player.pieces[lastRecord.pieceIndex];
+   211→        if (piece && piece.state === 'active') { piece.state = 'home'; piece.steps = 0; }
+   212→      }
+   213→    }
+   214→    state.consecutiveSixes = 0;
+   215→  }
+   216→  let nextIndex = (state.currentPlayerIndex + 1) % state.players.length;
+   217→  let attempts = 0;
+   218→  while (attempts < state.players.length) {
+   219→    const p = state.players[nextIndex];
+   220→    if (p && (p.isConnected || !p.isBot)) break;
+   221→    if (p && p.isBot && !p.isConnected) break;
+   222→    nextIndex = (nextIndex + 1) % state.players.length;
+   223→    attempts++;
+   224→  }
+   225→  state.currentPlayerIndex = nextIndex;
+   226→  state.diceValue = null;
+   227→  state.diceRolled = false;
+   228→  state.consecutiveSixes = 0;
+   229→}
+   230→
+   231→function autoSelectMove(state: GameState, playerIndex: number, diceValue: number): number {
+   232→  const validMoves = getValidMoves(state, playerIndex, diceValue);
+   233→  if (validMoves.length === 0) return -1;
+   234→  if (validMoves.length === 1) return validMoves[0];
+   235→  const player = state.players[playerIndex];
+   236→  if (!player) return validMoves[0];
+   237→  let bestMove = validMoves[0];
+   238→  let bestScore = -Infinity;
+   239→  for (const moveIdx of validMoves) {
+   240→    let score = 0;
+   241→    const piece = player.pieces[moveIdx];
+   242→    if (!piece) continue;
+   243→    let newSteps: number;
+   244→    if (piece.state === 'home') { newSteps = 1; } else { newSteps = piece.steps + diceValue; }
+   245→    if (newSteps === 57) score = 1000;
+   246→    else if (newSteps >= 52) score = 500 + newSteps;
+   247→    else if (piece.state === 'home') score = 300;
+   248→    else if (newSteps >= 1 && newSteps <= 51) {
+   249→      const destPathIndex = getMainPathIndex(player.color, newSteps);
+   250→      if (!isSafeZone(destPathIndex)) {
+   251→        for (const opponent of state.players) {
+   252→          if (opponent.color === player.color) continue;
+   253→          for (const op of opponent.pieces) {
+   254→            if (op.state !== 'active' || op.steps < 1 || op.steps > 51) continue;
+   255→            if (getMainPathIndex(opponent.color, op.steps) === destPathIndex) score += 400;
+   256→          }
+   257→        }
+   258→      }
+   259→      score += piece.steps;
+   260→      if (isSafeZone(destPathIndex)) score += 50;
+   261→    }
+   262→    if (score > bestScore) { bestScore = score; bestMove = moveIdx; }
+   263→  }
+   264→  return bestMove;
+   265→}
+   266→
+   267→// ============ ROOM MANAGEMENT ============
+   268→
+   269→const rooms = new Map<string, GameState>();
+   270→const roomCodes = new Map<string, string>(); // code -> roomId
+   271→const socketToRoom = new Map<string, { roomId: string; playerId: string }>();
+   272→const socketToPlayer = new Map<string, string>(); // socketId -> playerId
+   273→
+   274→function generateRoomCode(): string {
+   275→  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+   276→  let code = '';
+   277→  do {
+   278→    code = '';
+   279→    for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+   280→  } while (roomCodes.has(code));
+   281→  return code;
+   282→}
+   283→
+   284→function getRoomInfo(state: GameState, hostId: string): RoomInfo {
+   285→  return {
+   286→    id: state.roomId,
+   287→    name: `Ludo Room`,
+   288→    code: roomCodes.get(state.roomId) || '',
+   289→    hostId,
+   290→    maxPlayers: 4,
+   291→    playerCount: state.players.length,
+   292→    status: state.phase,
+   293→    createdAt: state.createdAt,
+   294→  };
+   295→}
+   296→
+   297→function getAllRooms(): RoomInfo[] {
+   298→  const result: RoomInfo[] = [];
+   299→  rooms.forEach((state, id) => {
+   300→    const host = state.players[0];
+   301→    result.push(getRoomInfo(state, host?.id || ''));
+   302→  });
+   303→  return result;
+   304→}
+   305→
+   306→// ============ BOT AI ============
+   307→
+   308→function handleBotTurn(io: Server, roomId: string, playerIndex: number) {
+   309→  const state = rooms.get(roomId);
+   310→  if (!state) return;
+   311→  
+   312→  const player = state.players[playerIndex];
+   313→  if (!player || !player.isBot) return;
+   314→  
+   315→  // Delay for realism
+   316→  setTimeout(() => {
+   317→    if (!rooms.has(roomId)) return;
+   318→    const currentState = rooms.get(roomId)!;
+   319→    if (currentState.phase !== 'playing' || currentState.currentPlayerIndex !== playerIndex) return;
+   320→    
+   321→    // Roll dice
+   322→    const diceValue = rollDice(currentState);
+   323→    io.to(roomId).emit('dice:rolled', {
+   324→      playerId: player.id,
+   325→      playerColor: player.color,
+   326→      value: diceValue,
+   327→    });
+   328→    
+   329→    // Get valid moves
+   330→    const validMoves = getValidMoves(currentState, playerIndex, diceValue);
+   331→    
+   332→    if (validMoves.length === 0) {
+   333→      // No valid moves, pass turn
+   334→      setTimeout(() => {
+   335→        if (!rooms.has(roomId)) return;
+   336→        const s = rooms.get(roomId)!;
+   337→        s.turnHistory.push({
+   338→          playerId: player.id, playerColor: player.color,
+   339→          diceValue, pieceIndex: -1, fromSteps: 0, toSteps: 0,
+   340→          captured: null, timestamp: Date.now(),
+   341→        });
+   342→        io.to(roomId).emit('turn:noMoves', { playerId: player.id, playerColor: player.color, diceValue });
+   343→        nextTurn(s, false);
+   344→        io.to(roomId).emit('game:stateUpdate', serializeGameState(s));
+   345→        
+   346→        // Check next player for bot
+   347→        const nextP = s.players[s.currentPlayerIndex];
+   348→        if (nextP?.isBot && s.phase === 'playing') {
+   349→          handleBotTurn(io, roomId, s.currentPlayerIndex);
+   350→        }
+   351→      }, 800);
+   352→      return;
+   353→    }
+   354→    
+   355→    // Select move
+   356→    const moveIdx = autoSelectMove(currentState, playerIndex, diceValue);
+   357→    
+   358→    setTimeout(() => {
+   359→      if (!rooms.has(roomId)) return;
+   360→      const s = rooms.get(roomId)!;
+   361→      if (s.phase !== 'playing' || s.currentPlayerIndex !== playerIndex) return;
+   362→      
+   363→      const result = executeMove(s, playerIndex, moveIdx, diceValue);
+   364→      
+   365→      s.turnHistory.push({
+   366→        playerId: player.id, playerColor: player.color,
+   367→        diceValue, pieceIndex: moveIdx,
+   368→        fromSteps: result.fromSteps, toSteps: result.toSteps,
+   369→        captured: result.captured || null, timestamp: Date.now(),
+   370→      });
+   371→      
+   372→      io.to(roomId).emit('piece:moved', {
+   373→        playerId: player.id, playerColor: player.color,
+   374→        pieceIndex: moveIdx, fromSteps: result.fromSteps, toSteps: result.toSteps,
+   375→        captured: result.captured || null, enteredBoard: result.enteredBoard,
+   376→        reachedHome: result.reachedHome,
+   377→      });
+   378→      
+   379→      if (s.phase === 'finished') {
+   380→        io.to(roomId).emit('game:finished', { winner: s.winner, winnerName: player.name });
+   381→        io.to(roomId).emit('game:stateUpdate', serializeGameState(s));
+   382→        return;
+   383→      }
+   384→      
+   385→      const hadExtraTurn = result.extraTurn && result.success;
+   386→      nextTurn(s, hadExtraTurn);
+   387→      io.to(roomId).emit('game:stateUpdate', serializeGameState(s));
+   388→      
+   389→      if (hadExtraTurn) {
+   390→        handleBotTurn(io, roomId, s.currentPlayerIndex);
+   391→      } else {
+   392→        const nextP = s.players[s.currentPlayerIndex];
+   393→        if (nextP?.isBot && s.phase === 'playing') {
+   394→          handleBotTurn(io, roomId, s.currentPlayerIndex);
+   395→        }
+   396→      }
+   397→    }, 1000);
+   398→  }, 1200);
+   399→}
+   400→
+   401→function serializeGameState(state: GameState): any {
+   402→  return {
+   403→    roomId: state.roomId,
+   404→    phase: state.phase,
+   405→    players: state.players.map(p => ({
+   406→      id: p.id, name: p.name, color: p.color, isConnected: p.isConnected, isBot: p.isBot,
+   407→      pieces: p.pieces.map(pc => ({ id: pc.id, color: pc.color, index: pc.index, state: pc.state, steps: pc.steps })),
+   408→    })),
+   409→    currentPlayerIndex: state.currentPlayerIndex,
+   410→    diceValue: state.diceValue,
+   411→    diceRolled: state.diceRolled,
+   412→    winner: state.winner,
+   413→    turnHistory: state.turnHistory.slice(-20), // Last 20 turns
+   414→  };
+   415→}
+   416→
+   417→// ============ SOCKET.IO SERVER ============
+   418→
+   419→const io = new Server({
+   420→  cors: { origin: '*', methods: ['GET', 'POST'] },
+   421→  pingTimeout: 10000,
+   422→  pingInterval: 5000,
+   423→});
+   424→
+   425→io.on('connection', (socket) => {
+   426→  console.log(`[Ludo] Connected: ${socket.id}`);
+   427→
+   428→  // Create a new room
+   429→  socket.on('room:create', (data: { playerName: string }, callback: (response: any) => void) => {
+   430→    const roomId = uuidv4();
+   431→    const code = generateRoomCode();
+   432→    const state = createGameState(roomId);
+   433→    
+   434→    const playerId = socket.id;
+   435→    const color = PLAYER_COLORS[0];
+   436→    state.players.push(createPlayer(playerId, data.playerName || 'Player 1', color));
+   437→    
+   438→    rooms.set(roomId, state);
+   439→    roomCodes.set(code, roomId);
+   440→    socketToRoom.set(socket.id, { roomId, playerId });
+   441→    socketToPlayer.set(socket.id, playerId);
+   442→    
+   443→    socket.join(roomId);
+   444→    
+   445→    callback({ success: true, roomId, code, color, playerCount: 1 });
+   446→    io.to(roomId).emit('room:updated', {
+   447→      players: state.players.map(p => ({ id: p.id, name: p.name, color: p.color, isBot: p.isBot, isConnected: p.isConnected })),
+   448→      hostId: playerId,
+   449→    });
+   450→    console.log(`[Ludo] Room created: ${code} by ${data.playerName}`);
+   451→  });
+   452→
+   453→  // Join an existing room
+   454→  socket.on('room:join', (data: { code: string; playerName: string }, callback: (response: any) => void) => {
+   455→    const roomId = roomCodes.get(data.code.toUpperCase());
+   456→    if (!roomId) {
+   457→      callback({ success: false, error: 'Room not found' });
+   458→      return;
+   459→    }
+   460→    
+   461→    const state = rooms.get(roomId);
+   462→    if (!state) {
+   463→      callback({ success: false, error: 'Room not found' });
+   464→      return;
+   465→    }
+   466→    
+   467→    if (state.phase !== 'waiting') {
+   468→      callback({ success: false, error: 'Game already in progress' });
+   469→      return;
+   470→    }
+   471→    
+   472→    if (state.players.length >= 4) {
+   473→      callback({ success: false, error: 'Room is full' });
+   474→      return;
+   475→    }
+   476→    
+   477→    const playerId = socket.id;
+   478→    const color = PLAYER_COLORS[state.players.length];
+   479→    state.players.push(createPlayer(playerId, data.playerName || `Player ${state.players.length + 1}`, color));
+   480→    
+   481→    socketToRoom.set(socket.id, { roomId, playerId });
+   482→    socketToPlayer.set(socket.id, playerId);
+   483→    socket.join(roomId);
+   484→    
+   485→    callback({ success: true, roomId, code: data.code.toUpperCase(), color, playerCount: state.players.length });
+   486→    io.to(roomId).emit('room:updated', {
+   487→      players: state.players.map(p => ({ id: p.id, name: p.name, color: p.color, isBot: p.isBot, isConnected: p.isConnected })),
+   488→      hostId: state.players[0]?.id,
+   489→    });
+   490→    io.to(roomId).emit('game:stateUpdate', serializeGameState(state));
+   491→    console.log(`[Ludo] ${data.playerName} joined room ${data.code.toUpperCase()}`);
+   492→  });
+   493→
+   494→  // Add bot to room
+   495→  socket.on('room:addBot', (data: { roomId?: string }, callback: (response: any) => void) => {
+   496→    const info = socketToRoom.get(socket.id);
+   497→    const roomId = data.roomId || info?.roomId;
+   498→    if (!roomId) { callback({ success: false, error: 'Not in a room' }); return; }
+   499→    
+   500→    const state = rooms.get(roomId);
+   501→    if (!state) { callback({ success: false, error: 'Room not found' }); return; }
+   502→    if (state.phase !== 'waiting') { callback({ success: false, error: 'Game already started' }); return; }
+   503→    if (state.players.length >= 4) { callback({ success: false, error: 'Room is full' }); return; }
+   504→    
+   505→    const botId = `bot-${uuidv4()}`;
+   506→    const color = PLAYER_COLORS[state.players.length];
+   507→    const botNames = ['Bot Alpha', 'Bot Beta', 'Bot Gamma', 'Bot Delta'];
+   508→    state.players.push(createPlayer(botId, botNames[state.players.length] || `Bot ${state.players.length + 1}`, color, true));
+   509→    
+   510→    callback({ success: true, botName: state.players[state.players.length - 1].name, color });
+   511→    io.to(roomId).emit('room:updated', {
+   512→      players: state.players.map(p => ({ id: p.id, name: p.name, color: p.color, isBot: p.isBot, isConnected: p.isConnected })),
+   513→      hostId: state.players[0]?.id,
+   514→    });
+   515→    console.log(`[Ludo] Bot added to room, now ${state.players.length} players`);
+   516→  });
+   517→
+   518→  // Remove bot from room
+   519→  socket.on('room:removeBot', (data: { roomId?: string }, callback: (response: any) => void) => {
+   520→    const info = socketToRoom.get(socket.id);
+   521→    const roomId = data.roomId || info?.roomId;
+   522→    if (!roomId) { callback({ success: false, error: 'Not in a room' }); return; }
+   523→    
+   524→    const state = rooms.get(roomId);
+   525→    if (!state) { callback({ success: false, error: 'Room not found' }); return; }
+   526→    if (state.phase !== 'waiting') { callback({ success: false, error: 'Game already started' }); return; }
+   527→    
+   528→    const botIndex = state.players.findLastIndex(p => p.isBot);
+   529→    if (botIndex === -1) { callback({ success: false, error: 'No bots to remove' }); return; }
+   530→    
+   531→    state.players.splice(botIndex, 1);
+   532→    callback({ success: true });
+   533→    io.to(roomId).emit('room:updated', {
+   534→      players: state.players.map(p => ({ id: p.id, name: p.name, color: p.color, isBot: p.isBot, isConnected: p.isConnected })),
+   535→      hostId: state.players[0]?.id,
+   536→    });
+   537→  });
+   538→
+   539→  // Start the game
+   540→  socket.on('game:start', (data: {}, callback: (response: any) => void) => {
+   541→    const info = socketToRoom.get(socket.id);
+   542→    if (!info) { callback({ success: false, error: 'Not in a room' }); return; }
+   543→    
+   544→    const state = rooms.get(info.roomId);
+   545→    if (!state) { callback({ success: false, error: 'Room not found' }); return; }
+   546→    if (state.players[0]?.id !== info.playerId) { callback({ success: false, error: 'Only host can start' }); return; }
+   547→    if (state.players.length < 2) { callback({ success: false, error: 'Need at least 2 players' }); return; }
+   548→    
+   549→    state.phase = 'playing';
+   550→    state.currentPlayerIndex = 0;
+   551→    state.diceValue = null;
+   552→    state.diceRolled = false;
+   553→    state.consecutiveSixes = 0;
+   554→    state.createdAt = Date.now();
+   555→    
+   556→    callback({ success: true });
+   557→    io.to(info.roomId).emit('game:started', { gameState: serializeGameState(state) });
+   558→    io.to(info.roomId).emit('game:stateUpdate', serializeGameState(state));
+   559→    console.log(`[Ludo] Game started in room ${roomCodes.get(info.roomId)}`);
+   560→    
+   561→    // If first player is a bot, handle their turn
+   562→    const firstPlayer = state.players[0];
+   563→    if (firstPlayer?.isBot) {
+   564→      handleBotTurn(io, info.roomId, 0);
+   565→    }
+   566→  });
+   567→
+   568→  // Roll dice
+   569→  socket.on('dice:roll', (data: {}, callback: (response: any) => void) => {
+   570→    const info = socketToRoom.get(socket.id);
+   571→    if (!info) { callback({ success: false, error: 'Not in a room' }); return; }
+   572→    
+   573→    const state = rooms.get(info.roomId);
+   574→    if (!state) { callback({ success: false, error: 'Room not found' }); return; }
+   575→    if (state.phase !== 'playing') { callback({ success: false, error: 'Game not in progress' }); return; }
+   576→    
+   577→    const currentPlayer = state.players[state.currentPlayerIndex];
+   578→    if (!currentPlayer || currentPlayer.id !== info.playerId) {
+   579→      callback({ success: false, error: 'Not your turn' });
+   580→      return;
+   581→    }
+   582→    if (state.diceRolled) {
+   583→      callback({ success: false, error: 'Already rolled' });
+   584→      return;
+   585→    }
+   586→    
+   587→    const diceValue = rollDice(state);
+   588→    console.log(`[Ludo] ${currentPlayer.name} rolled ${diceValue}`);
+   589→    
+   590→    callback({ success: true, value: diceValue });
+   591→    io.to(info.roomId).emit('dice:rolled', {
+   592→      playerId: info.playerId,
+   593→      playerColor: currentPlayer.color,
+   594→      value: diceValue,
+   595→    });
+   596→    
+   597→    // Check for valid moves
+   598→    const validMoves = getValidMoves(state, state.currentPlayerIndex, diceValue);
+   599→    
+   600→    if (validMoves.length === 0) {
+   601→      // Auto-pass after short delay
+   602→      setTimeout(() => {
+   603→        if (!rooms.has(info.roomId)) return;
+   604→        const s = rooms.get(info.roomId)!;
+   605→        s.turnHistory.push({
+   606→          playerId: info.playerId, playerColor: currentPlayer.color,
+   607→          diceValue, pieceIndex: -1, fromSteps: 0, toSteps: 0,
+   608→          captured: null, timestamp: Date.now(),
+   609→        });
+   610→        io.to(info.roomId).emit('turn:noMoves', { playerId: info.playerId, playerColor: currentPlayer.color, diceValue });
+   611→        nextTurn(s, false);
+   612→        io.to(info.roomId).emit('game:stateUpdate', serializeGameState(s));
+   613→        
+   614→        // Check if next is bot
+   615→        const nextP = s.players[s.currentPlayerIndex];
+   616→        if (nextP?.isBot && s.phase === 'playing') {
+   617→          handleBotTurn(io, info.roomId, s.currentPlayerIndex);
+   618→        }
+   619→      }, 1500);
+   620→    }
+   621→    
+   622→    io.to(info.roomId).emit('game:stateUpdate', serializeGameState(state));
+   623→  });
+   624→
+   625→  // Move piece
+   626→  socket.on('piece:move', (data: { pieceIndex: number }, callback: (response: any) => void) => {
+   627→    const info = socketToRoom.get(socket.id);
+   628→    if (!info) { callback({ success: false, error: 'Not in a room' }); return; }
+   629→    
+   630→    const state = rooms.get(info.roomId);
+   631→    if (!state) { callback({ success: false, error: 'Room not found' }); return; }
+   632→    if (state.phase !== 'playing') { callback({ success: false, error: 'Game not in progress' }); return; }
+   633→    if (!state.diceRolled || state.diceValue === null) { callback({ success: false, error: 'Roll dice first' }); return; }
+   634→    
+   635→    const currentPlayer = state.players[state.currentPlayerIndex];
+   636→    if (!currentPlayer || currentPlayer.id !== info.playerId) {
+   637→      callback({ success: false, error: 'Not your turn' });
+   638→      return;
+   639→    }
+   640→    
+   641→    const result = executeMove(state, state.currentPlayerIndex, data.pieceIndex, state.diceValue);
+   642→    if (!result.success) {
+   643→      callback({ success: false, error: result.reason });
+   644→      return;
+   645→    }
+   646→    
+   647→    state.turnHistory.push({
+   648→      playerId: info.playerId, playerColor: currentPlayer.color,
+   649→      diceValue: state.diceValue, pieceIndex: data.pieceIndex,
+   650→      fromSteps: result.fromSteps, toSteps: result.toSteps,
+   651→      captured: result.captured || null, timestamp: Date.now(),
+   652→    });
+   653→    
+   654→    callback({ success: true, result });
+   655→    io.to(info.roomId).emit('piece:moved', {
+   656→      playerId: info.playerId, playerColor: currentPlayer.color,
+   657→      pieceIndex: data.pieceIndex, fromSteps: result.fromSteps, toSteps: result.toSteps,
+   658→      captured: result.captured || null, enteredBoard: result.enteredBoard,
+   659→      reachedHome: result.reachedHome,
+   660→    });
+   661→    
+   662→    if (state.phase === 'finished') {
+   663→      io.to(info.roomId).emit('game:finished', { winner: state.winner, winnerName: currentPlayer.name });
+   664→      io.to(info.roomId).emit('game:stateUpdate', serializeGameState(state));
+   665→      return;
+   666→    }
+   667→    
+   668→    const hadExtraTurn = result.extraTurn;
+   669→    nextTurn(state, hadExtraTurn);
+   670→    io.to(info.roomId).emit('game:stateUpdate', serializeGameState(state));
+   671→    
+   672→    if (hadExtraTurn) {
+   673→      const p = state.players[state.currentPlayerIndex];
+   674→      if (p?.isBot && state.phase === 'playing') {
+   675→        handleBotTurn(io, info.roomId, state.currentPlayerIndex);
+   676→      }
+   677→    } else {
+   678→      const nextP = state.players[state.currentPlayerIndex];
+   679→      if (nextP?.isBot && state.phase === 'playing') {
+   680→        handleBotTurn(io, info.roomId, state.currentPlayerIndex);
+   681→      }
+   682→    }
+   683→  });
+   684→
+   685→  // Get valid moves
+   686→  socket.on('game:getValidMoves', (data: {}, callback: (response: any) => void) => {
+   687→    const info = socketToRoom.get(socket.id);
+   688→    if (!info) { callback({ success: false, moves: [] }); return; }
+   689→    const state = rooms.get(info.roomId);
+   690→    if (!state || state.phase !== 'playing' || !state.diceRolled || state.diceValue === null) {
+   691→      callback({ success: false, moves: [] });
+   692→      return;
+   693→    }
+   694→    const currentPlayer = state.players[state.currentPlayerIndex];
+   695→    if (!currentPlayer || currentPlayer.id !== info.playerId) {
+   696→      callback({ success: false, moves: [] });
+   697→      return;
+   698→    }
+   699→    const moves = getValidMoves(state, state.currentPlayerIndex, state.diceValue);
+   700→    callback({ success: true, moves });
+   701→  });
+   702→
+   703→  // Leave room
+   704→  socket.on('room:leave', () => {
+   705→    const info = socketToRoom.get(socket.id);
+   706→    if (!info) return;
+   707→    
+   708→    const state = rooms.get(info.roomId);
+   709→    if (state) {
+   710→      const playerIndex = state.players.findIndex(p => p.id === info.playerId);
+   711→      if (playerIndex !== -1) {
+   712→        const disconnectedPlayer = state.players[playerIndex];
+   713→        if (disconnectedPlayer.isBot) {
+   714→          state.players.splice(playerIndex, 1);
+   715→          // Reassign colors
+   716→          state.players.forEach((p, i) => {
+   717→            p.color = PLAYER_COLORS[i];
+   718→            p.pieces.forEach(piece => { piece.color = PLAYER_COLORS[i]; });
+   719→          });
+   720→        } else {
+   721→          disconnectedPlayer.isConnected = false;
+   722→        }
+   723→      }
+   724→      
+   725→      if (state.phase === 'waiting') {
+   726→        // Remove player entirely in waiting phase
+   727→        const idx = state.players.findIndex(p => p.id === info.playerId);
+   728→        if (idx !== -1) {
+   729→          state.players.splice(idx, 1);
+   730→          state.players.forEach((p, i) => {
+   731→            p.color = PLAYER_COLORS[i];
+   732→            p.pieces.forEach(piece => { piece.color = PLAYER_COLORS[i]; });
+   733→          });
+   734→        }
+   735→      }
+   736→      
+   737→      io.to(info.roomId).emit('room:updated', {
+   738→        players: state.players.map(p => ({ id: p.id, name: p.name, color: p.color, isBot: p.isBot, isConnected: p.isConnected })),
+   739→        hostId: state.players[0]?.id,
+   740→      });
+   741→      io.to(info.roomId).emit('game:stateUpdate', serializeGameState(state));
+   742→      
+   743→      // Clean up empty rooms
+   744→      if (state.players.length === 0) {
+   745→        rooms.delete(info.roomId);
+   746→        const code = [...roomCodes.entries()].find(([, id]) => id === info.roomId)?.[0];
+   747→        if (code) roomCodes.delete(code);
+   748→      }
+   749→    }
+   750→    
+   751→    socket.leave(info.roomId);
+   752→    socketToRoom.delete(socket.id);
+   753→    socketToPlayer.delete(socket.id);
+   754→    console.log(`[Ludo] Disconnected: ${socket.id}`);
+   755→  });
+   756→
+   757→  // Get room list
+   758→  socket.on('rooms:list', (callback: (rooms: RoomInfo[]) => void) => {
+   759→    callback(getAllRooms());
+   760→  });
+   761→
+   762→  // Reconnect
+   763→  socket.on('room:reconnect', (data: { roomId: string; playerId: string }, callback: (response: any) => void) => {
+   764→    const state = rooms.get(data.roomId);
+   765→    if (!state) { callback({ success: false, error: 'Room not found' }); return; }
+   766→    
+   767→    const playerIndex = state.players.findIndex(p => p.id === data.playerId);
+   768→    if (playerIndex === -1) { callback({ success: false, error: 'Player not found' }); return; }
+   769→    
+   770→    state.players[playerIndex].isConnected = true;
+   771→    socketToRoom.set(socket.id, { roomId: data.roomId, playerId: data.playerId });
+   772→    socketToPlayer.set(socket.id, data.playerId);
+   773→    socket.join(data.roomId);
+   774→    
+   775→    callback({ success: true, gameState: serializeGameState(state) });
+   776→    io.to(data.roomId).emit('room:updated', {
+   777→      players: state.players.map(p => ({ id: p.id, name: p.name, color: p.color, isBot: p.isBot, isConnected: p.isConnected })),
+   778→      hostId: state.players[0]?.id,
+   779→    });
+   780→    console.log(`[Ludo] Reconnected: ${data.playerId}`);
+   781→  });
+   782→
+   783→  // Restart game
+   784→  socket.on('game:restart', (data: {}, callback: (response: any) => void) => {
+   785→    const info = socketToRoom.get(socket.id);
+   786→    if (!info) { callback({ success: false, error: 'Not in a room' }); return; }
+   787→    
+   788→    const state = rooms.get(info.roomId);
+   789→    if (!state) { callback({ success: false, error: 'Room not found' }); return; }
+   790→    if (state.players[0]?.id !== info.playerId) { callback({ success: false, error: 'Only host can restart' }); return; }
+   791→    
+   792→    // Reset all pieces
+   793→    state.phase = 'waiting';
+   794→    state.players.forEach(p => {
+   795→      p.pieces.forEach(piece => {
+   796→        piece.state = 'home';
+   797→        piece.steps = 0;
+   798→      });
+   799→    });
+   800→    state.currentPlayerIndex = 0;
+   801→    state.diceValue = null;
+   802→    state.diceRolled = false;
+   803→    state.consecutiveSixes = 0;
+   804→    state.winner = null;
+   805→    state.turnHistory = [];
+   806→    
+   807→    callback({ success: true });
+   808→    io.to(info.roomId).emit('game:stateUpdate', serializeGameState(state));
+   809→    io.to(info.roomId).emit('room:updated', {
+   810→      players: state.players.map(p => ({ id: p.id, name: p.name, color: p.color, isBot: p.isBot, isConnected: p.isConnected })),
+   811→      hostId: state.players[0]?.id,
+   812→    });
+   813→  });
+   814→
+   815→  socket.on('disconnect', () => {
+   816→    const info = socketToRoom.get(socket.id);
+   817→    if (!info) return;
+   818→    
+   819→    const state = rooms.get(info.roomId);
+   820→    if (state) {
+   821→      const playerIndex = state.players.findIndex(p => p.id === info.playerId);
+   822→      if (playerIndex !== -1 && !state.players[playerIndex].isBot) {
+   823→        state.players[playerIndex].isConnected = false;
+   824→        io.to(info.roomId).emit('player:disconnected', { playerId: info.playerId });
+   825→      }
+   826→      
+   827→      io.to(info.roomId).emit('room:updated', {
+   828→        players: state.players.map(p => ({ id: p.id, name: p.name, color: p.color, isBot: p.isBot, isConnected: p.isConnected })),
+   829→        hostId: state.players[0]?.id,
+   830→      });
+   831→    }
+   832→    
+   833→    socketToRoom.delete(socket.id);
+   834→    socketToPlayer.delete(socket.id);
+   835→    console.log(`[Ludo] Disconnected: ${socket.id}`);
+   836→  });
+   837→});
+   838→
+   839→const PORT = 3003;
+   840→io.listen(PORT);
+   841→console.log(`[Ludo] Socket.io server running on port ${PORT}`);

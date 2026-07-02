@@ -1,3 +1,4 @@
+import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -416,10 +417,26 @@ function serializeGameState(state: GameState): any {
 
 // ============ SOCKET.IO SERVER ============
 
-const io = new Server({
+const PORT = 3003;
+const httpServer = createServer();
+const io = new Server(httpServer, {
+  path: '/',
   cors: { origin: '*', methods: ['GET', 'POST'] },
-  pingTimeout: 10000,
-  pingInterval: 5000,
+  pingTimeout: 60000,
+  pingInterval: 25000,
+});
+httpServer.listen(PORT, '0.0.0.0');
+console.log(`[Ludo] Socket.io server running on port ${PORT}`);
+
+// Keep process alive and handle errors
+process.on('uncaughtException', (err) => {
+  console.error('[Ludo] Uncaught exception:', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('[Ludo] Unhandled rejection:', err);
+});
+httpServer.on('error', (err) => {
+  console.error('[Ludo] HTTP server error:', err);
 });
 
 io.on('connection', (socket) => {
@@ -780,6 +797,31 @@ io.on('connection', (socket) => {
     console.log(`[Ludo] Reconnected: ${data.playerId}`);
   });
 
+  // Chat message
+  socket.on('chat:message', (data: { message: string }, callback: (response: any) => void) => {
+    const info = socketToRoom.get(socket.id);
+    if (!info) { callback({ success: false, error: 'Not in a room' }); return; }
+    
+    const state = rooms.get(info.roomId);
+    if (!state) { callback({ success: false, error: 'Room not found' }); return; }
+    
+    const player = state.players.find(p => p.id === info.playerId);
+    if (!player) { callback({ success: false, error: 'Player not found' }); return; }
+    
+    const truncated = data.message.substring(0, 200);
+    
+    // Broadcast to all players in the room
+    io.to(info.roomId).emit('chat:message', {
+      playerId: socket.id,
+      playerName: player.name,
+      playerColor: player.color,
+      message: truncated,
+      timestamp: Date.now(),
+    });
+    
+    callback({ success: true });
+  });
+
   // Restart game
   socket.on('game:restart', (data: {}, callback: (response: any) => void) => {
     const info = socketToRoom.get(socket.id);
@@ -836,6 +878,3 @@ io.on('connection', (socket) => {
   });
 });
 
-const PORT = 3003;
-io.listen(PORT);
-console.log(`[Ludo] Socket.io server running on port ${PORT}`);

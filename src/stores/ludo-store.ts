@@ -38,10 +38,19 @@ export interface RoomPlayer {
   isConnected: boolean;
 }
 
+export interface ChatMessage {
+  playerId: string;
+  playerName: string;
+  playerColor: PlayerColor;
+  message: string;
+  timestamp: number;
+}
+
 interface LudoStore {
   // Connection
   socket: Socket | null;
   connected: boolean;
+  connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error' | 'reconnecting';
   
   // Player info
   playerId: string;
@@ -62,6 +71,14 @@ interface LudoStore {
   isMyTurn: boolean;
   validMoves: number[];
   winner: PlayerColor | null;
+  
+  // Chat
+  chatMessages: ChatMessage[];
+  sendChatMessage: (message: string) => void;
+  
+  // Sound
+  soundMuted: boolean;
+  toggleSound: () => void;
   
   // UI state
   showLobby: boolean;
@@ -92,6 +109,7 @@ interface LudoStore {
 export const useLudoStore = create<LudoStore>((set, get) => ({
   socket: null,
   connected: false,
+  connectionStatus: 'disconnected',
   playerId: '',
   playerName: '',
   playerColor: null,
@@ -106,6 +124,8 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
   isMyTurn: false,
   validMoves: [],
   winner: null,
+  chatMessages: [],
+  soundMuted: false,
   showLobby: true,
   showGame: false,
   error: null,
@@ -115,7 +135,6 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
     const existing = get().socket;
     // Prevent duplicate connections
     if (existing) {
-      // If socket exists but disconnected, remove it
       if (!existing.connected) {
         existing.removeAllListeners();
         existing.disconnect();
@@ -124,11 +143,15 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
       }
     }
 
+    set({ connectionStatus: 'connecting' });
+
     const socket = io('/?XTransformPort=3003', {
-      transports: ['websocket', 'polling'],
+      transports: ['polling', 'websocket'],
       reconnection: true,
-      reconnectionAttempts: 10,
+      reconnectionAttempts: 15,
       reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 10000,
     });
 
     // Store socket immediately to prevent duplicate creation
@@ -136,12 +159,32 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
 
     socket.on('connect', () => {
       console.log('[Ludo] Connected to server, id=', socket.id);
-      set({ connected: true, playerId: socket.id || '' });
+      set({ connected: true, playerId: socket.id || '', connectionStatus: 'connected' });
     });
 
-    socket.on('disconnect', () => {
-      console.log('[Ludo] Disconnected from server');
-      set({ connected: false });
+    socket.on('disconnect', (reason) => {
+      console.log('[Ludo] Disconnected from server:', reason);
+      set({ connected: false, connectionStatus: reason === 'io server disconnect' ? 'disconnected' : 'reconnecting' });
+    });
+
+    socket.on('connect_error', (err) => {
+      console.warn('[Ludo] Connection error:', err.message);
+      set({ connectionStatus: 'error' });
+    });
+
+    socket.io.on('reconnect_attempt', (attempt) => {
+      console.log('[Ludo] Reconnect attempt', attempt);
+      set({ connectionStatus: 'reconnecting' });
+    });
+
+    socket.io.on('reconnect', () => {
+      console.log('[Ludo] Reconnected');
+      set({ connectionStatus: 'connected', connected: true });
+    });
+
+    socket.io.on('reconnect_failed', () => {
+      console.error('[Ludo] Reconnect failed');
+      set({ connectionStatus: 'error' });
     });
 
     socket.on('room:updated', (data: { players: RoomPlayer[]; hostId: string }) => {
@@ -206,6 +249,11 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
 
     socket.on('player:disconnected', (data: { playerId: string }) => {
       set({ lastAction: `A player disconnected` });
+    });
+
+    socket.on('chat:message', (data: ChatMessage) => {
+      const { chatMessages } = get();
+      set({ chatMessages: [...chatMessages.slice(-49), data] }); // Keep last 50 messages
     });
 
     set({ socket });
@@ -319,8 +367,16 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
     });
   },
 
+  sendChatMessage: (message: string) => {
+    const { socket } = get();
+    if (!socket || !message.trim()) return;
+    socket.emit('chat:message', { message: message.trim() });
+  },
+
+  toggleSound: () => set(state => ({ soundMuted: !state.soundMuted })),
+
   leaveRoom: () => {
-    const { socket, roomId, playerId } = get();
+    const { socket, roomId } = get();
     if (socket && roomId) {
       socket.emit('room:leave');
     }
@@ -337,6 +393,7 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
       isMyTurn: false,
       validMoves: [],
       winner: null,
+      chatMessages: [],
       showLobby: true,
       showGame: false,
       error: null,
@@ -380,6 +437,6 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
   },
 
   _setError: (error: string | null) => set({ error }),
-  _setDiceValue: (value: number | null, _playerColor: PlayerColor) => set({ diceValue: value }),
+  _setDiceValue: (value: number | null) => set({ diceValue: value }),
   _setValidMoves: (moves: number[]) => set({ validMoves: moves }),
 }));

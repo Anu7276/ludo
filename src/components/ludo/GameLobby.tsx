@@ -15,12 +15,13 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog';
-import { Users, Plus, Bot, X, Copy, Check, Dices, LogIn, Crown, Loader2 } from 'lucide-react';
+import { Users, Plus, Bot, X, Copy, Check, Dices, LogIn, Crown, Loader2, WifiOff } from 'lucide-react';
 
 export default function GameLobby() {
   const {
     connect,
     connected,
+    connectionStatus,
     createRoom,
     joinRoom,
     addBot,
@@ -119,10 +120,24 @@ export default function GameLobby() {
               </div>
 
               {/* Connection status */}
-              {!connected && (
-                <div className="flex items-center gap-2 text-amber-600 text-sm p-2 bg-amber-50 rounded-lg">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Connecting to game server...
+              {connectionStatus !== 'connected' && (
+                <div className={`flex items-center gap-2 text-sm p-2.5 rounded-lg ${connectionStatus === 'error' ? 'text-red-600 bg-red-50' : 'text-amber-600 bg-amber-50'}`}>
+                  {connectionStatus === 'connecting' || connectionStatus === 'reconnecting' ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      {connectionStatus === 'reconnecting' ? 'Reconnecting to server...' : 'Connecting to game server...'}
+                    </>
+                  ) : connectionStatus === 'error' ? (
+                    <>
+                      <WifiOff className="w-4 h-4" />
+                      Connection failed. Please refresh the page.
+                    </>
+                  ) : (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Connecting to game server...
+                    </>
+                  )}
                 </div>
               )}
 
