@@ -145,7 +145,15 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
 
     set({ connectionStatus: 'connecting' });
 
-    const socket = io('/?XTransformPort=3003', {
+    const configuredSocketUrl = process.env.NEXT_PUBLIC_LUDO_SOCKET_URL;
+    const socketUrl =
+      configuredSocketUrl ||
+      (typeof window !== 'undefined' && window.location.port === '3000'
+        ? 'http://localhost:3003'
+        : '/?XTransformPort=3003');
+
+    const socket = io(socketUrl, {
+      path: process.env.NEXT_PUBLIC_LUDO_SOCKET_PATH || '/',
       transports: ['polling', 'websocket'],
       reconnection: true,
       reconnectionAttempts: 15,

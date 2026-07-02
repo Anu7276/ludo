@@ -1,0 +1,12 @@
+node_modules
+.next
+.git
+*.log
+npm-debug.log*
+tool-results
+upload
+download
+db/*.db
+*.png
+.env*
+mini-services/ludo-service/node_modules

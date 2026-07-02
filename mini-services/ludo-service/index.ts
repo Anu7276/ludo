@@ -1,6 +1,9 @@
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import { v4 as uuidv4 } from 'uuid';
+import { applicationDefault, getApps, initializeApp } from 'firebase-admin/app';
+import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import type { Firestore } from 'firebase-admin/firestore';
 
 // ============ GAME LOGIC (inlined for the mini-service) ============
 
@@ -272,6 +275,89 @@ const roomCodes = new Map<string, string>(); // code -> roomId
 const socketToRoom = new Map<string, { roomId: string; playerId: string }>();
 const socketToPlayer = new Map<string, string>(); // socketId -> playerId
 
+let firestore: Firestore | null = null;
+
+function initFirestore(): Firestore | null {
+  if (process.env.FIRESTORE_DISABLED === 'true') {
+    console.log('[Ludo] Firestore disabled by FIRESTORE_DISABLED=true');
+    return null;
+  }
+
+  try {
+    if (!getApps().length) {
+      const projectId = process.env.FIREBASE_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT;
+      initializeApp({
+        credential: applicationDefault(),
+        ...(projectId ? { projectId } : {}),
+      });
+    }
+    const db = getFirestore();
+    console.log('[Ludo] Firestore persistence enabled');
+    return db;
+  } catch (err) {
+    console.warn('[Ludo] Firestore unavailable; running with in-memory rooms only.', err);
+    return null;
+  }
+}
+
+function getRoomCode(roomId: string): string {
+  return [...roomCodes.entries()].find(([, id]) => id === roomId)?.[0] || '';
+}
+
+function roomPlayers(state: GameState) {
+  return state.players.map(p => ({
+    id: p.id,
+    name: p.name,
+    color: p.color,
+    isBot: p.isBot,
+    isConnected: p.isConnected,
+  }));
+}
+
+async function saveRoomSnapshot(roomId: string): Promise<void> {
+  if (!firestore) return;
+  const state = rooms.get(roomId);
+  if (!state) return;
+
+  try {
+    await firestore.collection('ludoRooms').doc(roomId).set({
+      roomId,
+      code: getRoomCode(roomId),
+      hostId: state.players[0]?.id || '',
+      status: state.phase,
+      playerCount: state.players.length,
+      players: roomPlayers(state),
+      gameState: serializeGameState(state),
+      createdAt: state.createdAt,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  } catch (err) {
+    console.warn(`[Ludo] Failed to persist room ${roomId}`, err);
+  }
+}
+
+async function deleteRoomSnapshot(roomId: string): Promise<void> {
+  if (!firestore) return;
+  try {
+    await firestore.collection('ludoRooms').doc(roomId).delete();
+  } catch (err) {
+    console.warn(`[Ludo] Failed to delete room ${roomId}`, err);
+  }
+}
+
+async function saveChatMessage(roomId: string, message: Record<string, unknown>): Promise<void> {
+  if (!firestore) return;
+  try {
+    await firestore
+      .collection('ludoRooms')
+      .doc(roomId)
+      .collection('messages')
+      .add({ ...message, createdAt: FieldValue.serverTimestamp() });
+  } catch (err) {
+    console.warn(`[Ludo] Failed to persist chat message for room ${roomId}`, err);
+  }
+}
+
 function generateRoomCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let code = '';
@@ -286,7 +372,7 @@ function getRoomInfo(state: GameState, hostId: string): RoomInfo {
   return {
     id: state.roomId,
     name: `Ludo Room`,
-    code: roomCodes.get(state.roomId) || '',
+    code: getRoomCode(state.roomId),
     hostId,
     maxPlayers: 4,
     playerCount: state.players.length,
@@ -323,6 +409,7 @@ function handleBotTurn(io: Server, roomId: string, playerIndex: number) {
         
         // Roll dice
         const diceValue = rollDice(currentState);
+        void saveRoomSnapshot(roomId);
         io.to(roomId).emit('dice:rolled', {
           playerId: player.id,
           playerColor: player.color,
@@ -345,6 +432,7 @@ function handleBotTurn(io: Server, roomId: string, playerIndex: number) {
               });
               io.to(roomId).emit('turn:noMoves', { playerId: player.id, playerColor: player.color, diceValue });
               nextTurn(s, false);
+              void saveRoomSnapshot(roomId);
               io.to(roomId).emit('game:stateUpdate', serializeGameState(s));
               
               // Schedule next bot turn
@@ -385,6 +473,7 @@ function handleBotTurn(io: Server, roomId: string, playerIndex: number) {
             });
             
             if (s.phase === 'finished') {
+              void saveRoomSnapshot(roomId);
               io.to(roomId).emit('game:finished', { winner: s.winner, winnerName: player.name });
               io.to(roomId).emit('game:stateUpdate', serializeGameState(s));
               return;
@@ -392,6 +481,7 @@ function handleBotTurn(io: Server, roomId: string, playerIndex: number) {
             
             const hadExtraTurn = result.extraTurn && result.success;
             nextTurn(s, hadExtraTurn);
+            void saveRoomSnapshot(roomId);
             io.to(roomId).emit('game:stateUpdate', serializeGameState(s));
             
             // Schedule next bot turn (not recursive to avoid stack overflow)
@@ -416,6 +506,7 @@ function handleBotTurn(io: Server, roomId: string, playerIndex: number) {
               if (rooms.has(roomId)) {
                 const s = rooms.get(roomId)!;
                 nextTurn(s, false);
+                void saveRoomSnapshot(roomId);
                 io.to(roomId).emit('game:stateUpdate', serializeGameState(s));
               }
             } catch (e) { /* give up */ }
@@ -448,7 +539,8 @@ function serializeGameState(state: GameState): any {
 
 // ============ SOCKET.IO SERVER ============
 
-const PORT = 3003;
+const PORT = Number(process.env.PORT || 3003);
+firestore = initFirestore();
 const httpServer = createServer();
 const io = new Server(httpServer, {
   path: '/',
@@ -490,6 +582,7 @@ io.on('connection', (socket) => {
     
     socket.join(roomId);
     
+    void saveRoomSnapshot(roomId);
     callback({ success: true, roomId, code, color, playerCount: 1 });
     io.to(roomId).emit('room:updated', {
       players: state.players.map(p => ({ id: p.id, name: p.name, color: p.color, isBot: p.isBot, isConnected: p.isConnected })),
@@ -530,6 +623,7 @@ io.on('connection', (socket) => {
     socketToPlayer.set(socket.id, playerId);
     socket.join(roomId);
     
+    void saveRoomSnapshot(roomId);
     callback({ success: true, roomId, code: data.code.toUpperCase(), color, playerCount: state.players.length });
     io.to(roomId).emit('room:updated', {
       players: state.players.map(p => ({ id: p.id, name: p.name, color: p.color, isBot: p.isBot, isConnected: p.isConnected })),
@@ -555,6 +649,7 @@ io.on('connection', (socket) => {
     const botNames = ['Bot Alpha', 'Bot Beta', 'Bot Gamma', 'Bot Delta'];
     state.players.push(createPlayer(botId, botNames[state.players.length] || `Bot ${state.players.length + 1}`, color, true));
     
+    void saveRoomSnapshot(roomId);
     callback({ success: true, botName: state.players[state.players.length - 1].name, color });
     io.to(roomId).emit('room:updated', {
       players: state.players.map(p => ({ id: p.id, name: p.name, color: p.color, isBot: p.isBot, isConnected: p.isConnected })),
@@ -577,6 +672,7 @@ io.on('connection', (socket) => {
     if (botIndex === -1) { callback({ success: false, error: 'No bots to remove' }); return; }
     
     state.players.splice(botIndex, 1);
+    void saveRoomSnapshot(roomId);
     callback({ success: true });
     io.to(roomId).emit('room:updated', {
       players: state.players.map(p => ({ id: p.id, name: p.name, color: p.color, isBot: p.isBot, isConnected: p.isConnected })),
@@ -601,6 +697,7 @@ io.on('connection', (socket) => {
     state.consecutiveSixes = 0;
     state.createdAt = Date.now();
     
+    void saveRoomSnapshot(info.roomId);
     callback({ success: true });
     io.to(info.roomId).emit('game:started', { gameState: serializeGameState(state) });
     io.to(info.roomId).emit('game:stateUpdate', serializeGameState(state));
@@ -635,6 +732,7 @@ io.on('connection', (socket) => {
     const diceValue = rollDice(state);
     console.log(`[Ludo] ${currentPlayer.name} rolled ${diceValue}`);
     
+    void saveRoomSnapshot(info.roomId);
     callback({ success: true, value: diceValue });
     io.to(info.roomId).emit('dice:rolled', {
       playerId: info.playerId,
@@ -657,6 +755,7 @@ io.on('connection', (socket) => {
         });
         io.to(info.roomId).emit('turn:noMoves', { playerId: info.playerId, playerColor: currentPlayer.color, diceValue });
         nextTurn(s, false);
+        void saveRoomSnapshot(info.roomId);
         io.to(info.roomId).emit('game:stateUpdate', serializeGameState(s));
         
         // Check if next is bot
@@ -699,6 +798,7 @@ io.on('connection', (socket) => {
       captured: result.captured || null, timestamp: Date.now(),
     });
     
+    void saveRoomSnapshot(info.roomId);
     callback({ success: true, result });
     io.to(info.roomId).emit('piece:moved', {
       playerId: info.playerId, playerColor: currentPlayer.color,
@@ -708,6 +808,7 @@ io.on('connection', (socket) => {
     });
     
     if (state.phase === 'finished') {
+      void saveRoomSnapshot(info.roomId);
       io.to(info.roomId).emit('game:finished', { winner: state.winner, winnerName: currentPlayer.name });
       io.to(info.roomId).emit('game:stateUpdate', serializeGameState(state));
       return;
@@ -715,6 +816,7 @@ io.on('connection', (socket) => {
     
     const hadExtraTurn = result.extraTurn;
     nextTurn(state, hadExtraTurn);
+    void saveRoomSnapshot(info.roomId);
     io.to(info.roomId).emit('game:stateUpdate', serializeGameState(state));
     
     if (hadExtraTurn) {
@@ -793,6 +895,9 @@ io.on('connection', (socket) => {
         rooms.delete(info.roomId);
         const code = [...roomCodes.entries()].find(([, id]) => id === info.roomId)?.[0];
         if (code) roomCodes.delete(code);
+        void deleteRoomSnapshot(info.roomId);
+      } else {
+        void saveRoomSnapshot(info.roomId);
       }
     }
     
@@ -820,6 +925,7 @@ io.on('connection', (socket) => {
     socketToPlayer.set(socket.id, data.playerId);
     socket.join(data.roomId);
     
+    void saveRoomSnapshot(data.roomId);
     callback({ success: true, gameState: serializeGameState(state) });
     io.to(data.roomId).emit('room:updated', {
       players: state.players.map(p => ({ id: p.id, name: p.name, color: p.color, isBot: p.isBot, isConnected: p.isConnected })),
@@ -840,15 +946,17 @@ io.on('connection', (socket) => {
     if (!player) { callback({ success: false, error: 'Player not found' }); return; }
     
     const truncated = data.message.substring(0, 200);
-    
-    // Broadcast to all players in the room
-    io.to(info.roomId).emit('chat:message', {
+    const chatMessage = {
       playerId: socket.id,
       playerName: player.name,
       playerColor: player.color,
       message: truncated,
       timestamp: Date.now(),
-    });
+    };
+    
+    // Broadcast to all players in the room
+    io.to(info.roomId).emit('chat:message', chatMessage);
+    void saveChatMessage(info.roomId, chatMessage);
     
     callback({ success: true });
   });
@@ -877,6 +985,7 @@ io.on('connection', (socket) => {
     state.winner = null;
     state.turnHistory = [];
     
+    void saveRoomSnapshot(info.roomId);
     callback({ success: true });
     io.to(info.roomId).emit('game:stateUpdate', serializeGameState(state));
     io.to(info.roomId).emit('room:updated', {
@@ -901,6 +1010,7 @@ io.on('connection', (socket) => {
         players: state.players.map(p => ({ id: p.id, name: p.name, color: p.color, isBot: p.isBot, isConnected: p.isConnected })),
         hostId: state.players[0]?.id,
       });
+      void saveRoomSnapshot(info.roomId);
     }
     
     socketToRoom.delete(socket.id);
@@ -908,4 +1018,3 @@ io.on('connection', (socket) => {
     console.log(`[Ludo] Disconnected: ${socket.id}`);
   });
 });
-
