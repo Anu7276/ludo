@@ -1,0 +1,691 @@
+     1→'use client';
+     2→
+     3→import React, { useCallback, useEffect, useRef, useState } from 'react';
+     4→import { motion, AnimatePresence } from 'framer-motion';
+     5→import confetti from 'canvas-confetti';
+     6→import { useLudoStore } from '@/stores/ludo-store';
+     7→import { PlayerColor, PLAYER_COLOR_HEX } from '@/lib/ludo/types';
+     8→import LudoBoard from './LudoBoard';
+     9→import LudoDice from './LudoDice';
+    10→import PlayerPanel from './PlayerPanel';
+    11→import GameChat from './GameChat';
+    12→import { playDiceRoll, playPieceMove, playCapture, playPieceHome, playWin, playNoMoves } from '@/lib/sounds';
+    13→import { Button } from '@/components/ui/button';
+    14→import {
+    15→  Dialog,
+    16→  DialogContent,
+    17→  DialogHeader,
+    18→  DialogTitle,
+    19→  DialogTrigger,
+    20→} from '@/components/ui/dialog';
+    21→import {
+    22→  Drawer,
+    23→  DrawerContent,
+    24→  DrawerHeader,
+    25→  DrawerTitle,
+    26→  DrawerTrigger,
+    27→} from '@/components/ui/drawer';
+    28→import { Separator } from '@/components/ui/separator';
+    29→import {
+    30→  Tooltip,
+    31→  TooltipContent,
+    32→  TooltipProvider,
+    33→  TooltipTrigger,
+    34→} from '@/components/ui/tooltip';
+    35→import {
+    36→  Trophy,
+    37→  RotateCcw,
+    38→  LogOut,
+    39→  Volume2,
+    40→  VolumeX,
+    41→  HelpCircle,
+    42→  Users,
+    43→  Dices,
+    44→  ChevronUp,
+    45→  Zap,
+    46→  Clock,
+    47→} from 'lucide-react';
+    48→
+    49→// Dice face unicode symbols
+    50→const DICE_FACES: Record<number, string> = {
+    51→  1: '⚀', 2: '⚁', 3: '⚂', 4: '⚃', 5: '⚄', 6: '⚅',
+    52→};
+    53→
+    54→export default function GameView() {
+    55→  const {
+    56→    gameState,
+    57→    validMoves,
+    58→    playerColor,
+    59→    diceValue,
+    60→    diceRolled,
+    61→    isMyTurn,
+    62→    currentPlayerIndex,
+    63→    winner,
+    64→    gamePhase,
+    65→    lastAction,
+    66→    rollDice,
+    67→    movePiece,
+    68→    leaveRoom,
+    69→    restartGame,
+    70→    roomCode,
+    71→    soundMuted,
+    72→    toggleSound,
+    73→  } = useLudoStore();
+    74→  const [drawerOpen, setDrawerOpen] = useState(false);
+    75→  const soundMutedRef = useRef(soundMuted);
+    76→  const confettiFired = useRef(false);
+    77→  const winnerRef = useRef<PlayerColor | null>(null);
+    78→  const [turnTimer, setTurnTimer] = useState(30);
+    79→  const timerInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+    80→
+    81→  // Turn countdown timer  
+    82→  const isActive = isMyTurn && !diceRolled && !winner && gamePhase === 'playing';
+    83→  useEffect(() => {
+    84→    if (timerInterval.current) clearInterval(timerInterval.current);
+    85→    timerInterval.current = null;
+    86→    if (!isActive) return;
+    87→    const startTime = Date.now();
+    88→    timerInterval.current = setInterval(() => {
+    89→      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    90→      setTurnTimer(Math.max(0, 30 - elapsed));
+    91→      if (30 - elapsed <= 0 && timerInterval.current) {
+    92→        clearInterval(timerInterval.current);
+    93→        timerInterval.current = null;
+    94→      }
+    95→    }, 250);
+    96→    return () => {
+    97→      if (timerInterval.current) {
+    98→        clearInterval(timerInterval.current);
+    99→        timerInterval.current = null;
+   100→      }
+   101→    };
+   102→  }, [isActive]);
+   103→
+   104→  // Keep soundMuted ref in sync
+   105→  useEffect(() => {
+   106→    soundMutedRef.current = soundMuted;
+   107→  }, [soundMuted]);
+   108→
+   109→  const currentPlayerColor = gameState?.players[currentPlayerIndex]?.color || null;
+   110→  const currentPlayerName = gameState?.players[currentPlayerIndex]?.name || '...';
+   111→  const winnerName = winner
+   112→    ? gameState?.players.find(p => p.color === winner)?.name || winner
+   113→    : null;
+   114→
+   115→  // Fire confetti when winner is set
+   116→  useEffect(() => {
+   117→    if (winner && winner !== winnerRef.current && !confettiFired.current) {
+   118→      confettiFired.current = true;
+   119→      winnerRef.current = winner;
+   120→
+   121→      const winnerColorHex = PLAYER_COLOR_HEX[winner];
+   122→
+   123→      // Play win sound
+   124→      if (!soundMutedRef.current) playWin();
+   125→
+   126→      // First burst
+   127→      confetti({
+   128→        particleCount: 100,
+   129→        spread: 70,
+   130→        origin: { y: 0.6 },
+   131→        colors: [winnerColorHex],
+   132→      });
+   133→
+   134→      // Second burst - delayed
+   135→      setTimeout(() => {
+   136→        confetti({
+   137→          particleCount: 60,
+   138→          angle: 60,
+   139→          spread: 55,
+   140→          origin: { x: 0, y: 0.65 },
+   141→          colors: [winnerColorHex, '#FFD700', '#FFFFFF'],
+   142→        });
+   143→      }, 300);
+   144→
+   145→      // Third burst - delayed
+   146→      setTimeout(() => {
+   147→        confetti({
+   148→          particleCount: 60,
+   149→          angle: 120,
+   150→          spread: 55,
+   151→          origin: { x: 1, y: 0.65 },
+   152→          colors: [winnerColorHex, '#FFD700', '#FFFFFF'],
+   153→        });
+   154→      }, 500);
+   155→    }
+   156→
+   157→    // Reset confetti flag when winner changes to null (new game)
+   158→    if (!winner) {
+   159→      confettiFired.current = false;
+   160→      winnerRef.current = null;
+   161→    }
+   162→  }, [winner]);
+   163→
+   164→  const handlePieceClick = useCallback(
+   165→    async (color: PlayerColor, pieceIndex: number) => {
+   166→      if (color !== playerColor) return;
+   167→      if (!validMoves.includes(pieceIndex)) return;
+   168→      await movePiece(pieceIndex);
+   169→    },
+   170→    [playerColor, validMoves, movePiece],
+   171→  );
+   172→
+   173→  // Play sounds on game events
+   174→  useEffect(() => {
+   175→    if (!lastAction || soundMutedRef.current) return;
+   176→    if (lastAction.includes('captured')) {
+   177→      playCapture();
+   178→    } else if (lastAction.includes('reached home')) {
+   179→      playPieceHome();
+   180→    } else if (lastAction.includes('moved piece') || lastAction.includes('entered the board')) {
+   181→      playPieceMove();
+   182→    } else if (lastAction.includes('No valid moves')) {
+   183→      playNoMoves();
+   184→    }
+   185→  }, [lastAction]);
+   186→
+   187→  const handleRoll = useCallback(async () => {
+   188→    if (!soundMutedRef.current) playDiceRoll();
+   189→    await rollDice();
+   190→  }, [rollDice]);
+   191→
+   192→  // Auto-roll for extra turns
+   193→  useEffect(() => {
+   194→    if (isMyTurn && diceRolled && validMoves.length === 0 && gamePhase === 'playing') {
+   195→      // Server handles auto-pass
+   196→    }
+   197→  }, [isMyTurn, diceRolled, validMoves, gamePhase]);
+   198→
+   199→  if (!gameState) return null;
+   200→
+   201→  const myColorHex = playerColor ? PLAYER_COLOR_HEX[playerColor] : '#6B7280';
+   202→
+   203→  return (
+   204→    <div className="h-[100dvh] flex flex-col bg-gradient-to-br from-gray-50 via-white to-gray-100 overflow-hidden">
+   205→      {/* ==================== GAME HEADER ==================== */}
+   206→      <header className="bg-white/90 backdrop-blur-md border-b border-gray-200/80 px-4 py-2.5 flex items-center justify-between sticky top-0 z-20">
+   207→        <div className="flex items-center gap-3">
+   208→          {/* Player color indicator + Logo */}
+   209→          <div className="relative">
+   210→            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-red-400 via-yellow-400 to-green-400 flex items-center justify-center shadow-sm">
+   211→              <span className="text-white text-xs font-black">L</span>
+   212→            </div>
+   213→            <div
+   214→              className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-white shadow-sm"
+   215→              style={{ backgroundColor: myColorHex }}
+   216→            />
+   217→          </div>
+   218→          <div>
+   219→            <h1 className="text-sm font-bold text-gray-900 leading-none tracking-tight">
+   220→              Ludo Online
+   221→            </h1>
+   222→            <p className="text-[10px] text-gray-400 mt-0.5 font-mono tracking-wider">
+   223→              Room: {roomCode}
+   224→            </p>
+   225→          </div>
+   226→        </div>
+   227→
+   228→        <div className="flex items-center gap-1.5">
+   229→          {/* How to Play */}
+   230→          <Dialog>
+   231→            <TooltipProvider delayDuration={300}>
+   232→              <Tooltip>
+   233→                <TooltipTrigger asChild>
+   234→                  <DialogTrigger asChild>
+   235→                    <Button
+   236→                      variant="ghost"
+   237→                      size="sm"
+   238→                      className="h-8 w-8 p-0 text-gray-400 hover:text-gray-600"
+   239→                    >
+   240→                      <HelpCircle className="w-4 h-4" />
+   241→                      <span className="sr-only">How to Play</span>
+   242→                    </Button>
+   243→                  </DialogTrigger>
+   244→                </TooltipTrigger>
+   245→                <TooltipContent side="bottom">
+   246→                  <p>How to Play</p>
+   247→                </TooltipContent>
+   248→              </Tooltip>
+   249→            </TooltipProvider>
+   250→            <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto">
+   251→              <DialogHeader>
+   252→                <DialogTitle className="flex items-center gap-2">
+   253→                  <Dices className="w-5 h-5 text-amber-500" />
+   254→                  How to Play Ludo
+   255→                </DialogTitle>
+   256→              </DialogHeader>
+   257→              <div className="space-y-4 text-sm text-gray-600 leading-relaxed pt-2">
+   258→                <div>
+   259→                  <h4 className="font-bold text-gray-800 mb-1">🎲 Objective</h4>
+   260→                  <p>Be the first player to move all 4 of your pieces from your home base to the center finish area.</p>
+   261→                </div>
+   262→                <Separator />
+   263→                <div>
+   264→                  <h4 className="font-bold text-gray-800 mb-1">🚀 Starting</h4>
+   265→                  <p>Roll a <strong>6</strong> to move a piece out of your home base onto the board. You get an extra turn when you roll a 6.</p>
+   266→                </div>
+   267→                <Separator />
+   268→                <div>
+   269→                  <h4 className="font-bold text-gray-800 mb-1">↩️ Movement</h4>
+   270→                  <p>Pieces move clockwise around the board. Roll the dice and tap a piece to move it forward by that number of steps.</p>
+   271→                </div>
+   272→                <Separator />
+   273→                <div>
+   274→                  <h4 className="font-bold text-gray-800 mb-1">⚔️ Capturing</h4>
+   275→                  <p>Land on an opponent&apos;s piece to send it back to their home base! You then get an extra turn.</p>
+   276→                </div>
+   277→                <Separator />
+   278→                <div>
+   279→                  <h4 className="font-bold text-gray-800 mb-1">🏠 Finishing</h4>
+   280→                  <p>Once a piece completes a full loop, it enters your home column. Roll the exact number needed to reach the center.</p>
+   281→                </div>
+   282→                <Separator />
+   283→                <div>
+   284→                  <h4 className="font-bold text-gray-800 mb-1">🏆 Winning</h4>
+   285→                  <p>The first player to get all 4 pieces into the center wins the game!</p>
+   286→                </div>
+   287→                <div className="rounded-xl bg-amber-50 border border-amber-200 p-3">
+   288→                  <p className="text-amber-700 text-xs font-medium">
+   289→                    💡 <strong>Tip:</strong> Rolling three 6&apos;s in a row will forfeit your turn!
+   290→                  </p>
+   291→                </div>
+   292→              </div>
+   293→            </DialogContent>
+   294→          </Dialog>
+   295→
+   296→          {/* Sound Toggle */}
+   297→          <TooltipProvider delayDuration={300}>
+   298→            <Tooltip>
+   299→              <TooltipTrigger asChild>
+   300→                <Button
+   301→                  variant="ghost"
+   302→                  size="sm"
+   303→                  className="h-8 w-8 p-0 text-gray-400 hover:text-gray-600"
+   304→                  onClick={toggleSound}
+   305→                >
+   306→                  {soundMuted ? (
+   307→                    <VolumeX className="w-4 h-4" />
+   308→                  ) : (
+   309→                    <Volume2 className="w-4 h-4" />
+   310→                  )}
+   311→                  <span className="sr-only">{soundMuted ? 'Unmute' : 'Mute'}</span>
+   312→                </Button>
+   313→              </TooltipTrigger>
+   314→              <TooltipContent side="bottom">
+   315→                <p>{soundMuted ? 'Unmute sounds' : 'Mute sounds'}</p>
+   316→              </TooltipContent>
+   317→            </Tooltip>
+   318→          </TooltipProvider>
+   319→
+   320→          {winner && (
+   321→            <Button
+   322→              variant="outline"
+   323→              size="sm"
+   324→              onClick={restartGame}
+   325→              className="h-8 text-xs font-semibold border-green-200 text-green-600 hover:bg-green-50 hover:text-green-700"
+   326→            >
+   327→              <RotateCcw className="w-3.5 h-3.5 mr-1" />
+   328→              <span className="hidden sm:inline">New Game</span>
+   329→            </Button>
+   330→          )}
+   331→
+   332→          <TooltipProvider delayDuration={300}>
+   333→            <Tooltip>
+   334→              <TooltipTrigger asChild>
+   335→                <Button
+   336→                  variant="ghost"
+   337→                  size="sm"
+   338→                  onClick={leaveRoom}
+   339→                  className="h-8 text-xs text-gray-400 hover:text-red-500"
+   340→                >
+   341→                  <LogOut className="w-3.5 h-3.5 sm:mr-1" />
+   342→                  <span className="hidden sm:inline">Leave</span>
+   343→                </Button>
+   344→              </TooltipTrigger>
+   345→              <TooltipContent side="bottom">
+   346→                <p>Leave Room</p>
+   347→              </TooltipContent>
+   348→            </Tooltip>
+   349→          </TooltipProvider>
+   350→        </div>
+   351→      </header>
+   352→
+   353→      {/* ==================== STATUS BAR ==================== */}
+   354→      <div className="bg-white/60 backdrop-blur-sm border-b border-gray-100 px-4 py-2">
+   355→        <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
+   356→          {/* Current Turn Indicator */}
+   357→          <div className="flex items-center gap-2 min-w-0">
+   358→            <motion.div
+   359→              key={currentPlayerColor}
+   360→              initial={{ scale: 0.5 }}
+   361→              animate={{ scale: 1 }}
+   362→              transition={{ type: 'spring', stiffness: 500, damping: 25 }}
+   363→              className="w-3.5 h-3.5 rounded-full shrink-0 shadow-sm"
+   364→              style={{ backgroundColor: PLAYER_COLOR_HEX[currentPlayerColor || 'red'] }}
+   365→            />
+   366→            <span className="text-xs font-semibold text-gray-600 truncate">
+   367→              {winner ? (
+   368→                <span style={{ color: PLAYER_COLOR_HEX[winner] }}>
+   369→                  🏆 {winnerName} Wins!
+   370→                </span>
+   371→              ) : isMyTurn ? (
+   372→                <span className="text-green-600">Your Turn</span>
+   373→              ) : (
+   374→                <span className="text-gray-500">{currentPlayerName}&apos;s Turn</span>
+   375→              )}
+   376→            </span>
+   377→          </div>
+   378→
+   379→          {/* Dice Value Display */}
+   380→          <div className="flex items-center gap-2 shrink-0">
+   381→            {diceRolled && diceValue ? (
+   382→              <motion.div
+   383→                key={diceValue}
+   384→                initial={{ scale: 0.6, rotateZ: -10 }}
+   385→                animate={{ scale: 1, rotateZ: 0 }}
+   386→                transition={{ type: 'spring', stiffness: 400, damping: 20 }}
+   387→                className="flex items-center gap-1.5 bg-white rounded-lg px-2.5 py-1 shadow-sm border border-gray-100"
+   388→              >
+   389→                <span className="text-lg leading-none">{DICE_FACES[diceValue] || ''}</span>
+   390→                <span className="text-sm font-black text-gray-700 tabular-nums">{diceValue}</span>
+   391→              </motion.div>
+   392→            ) : (
+   393→              <div className="flex items-center gap-1.5 text-gray-300 px-2.5 py-1">
+   394→                <Dices className="w-4 h-4" />
+   395→                <span className="text-xs text-gray-300">--</span>
+   396→              </div>
+   397→            )}
+   398→          </div>
+   399→
+   400→          {/* Turn Timer (when it's player's turn and hasn't rolled) */}
+   401→          {isMyTurn && !diceRolled && !winner && (
+   402→            <div className="flex items-center gap-1.5 shrink-0">
+   403→              <Clock className="w-3.5 h-3.5 text-gray-400" />
+   404→              <span
+   405→                className={`text-sm font-mono font-bold tabular-nums ${
+   406→                  turnTimer <= 10 ? 'text-red-500 animate-pulse' : turnTimer <= 20 ? 'text-amber-500' : 'text-gray-500'
+   407→                }`}
+   408→              >
+   409→                {turnTimer}s
+   410→              </span>
+   411→            </div>
+   412→          )}
+   413→
+   414→          {/* Last Action (hidden on small mobile) */}
+   415→          <div className="hidden sm:flex items-center gap-1.5 min-w-0 max-w-[200px]">
+   416→            <AnimatePresence mode="wait">
+   417→              {lastAction && (
+   418→                <motion.span
+   419→                  key={lastAction}
+   420→                  initial={{ opacity: 0, x: 10 }}
+   421→                  animate={{ opacity: 1, x: 0 }}
+   422→                  exit={{ opacity: 0, x: -10 }}
+   423→                  transition={{ duration: 0.25 }}
+   424→                  className="text-[11px] text-gray-400 truncate font-medium"
+   425→                >
+   426→                  {lastAction}
+   427→                </motion.span>
+   428→              )}
+   429→            </AnimatePresence>
+   430→          </div>
+   431→        </div>
+   432→      </div>
+   433→
+   434→      {/* ==================== MAIN CONTENT ==================== */}
+   435→      <main className="flex-1 flex items-center justify-center p-2 sm:p-4 lg:p-6 overflow-hidden">
+   436→        <div className="max-w-5xl w-full flex flex-col lg:flex-row items-center lg:items-start justify-center gap-2 sm:gap-4 lg:gap-6">
+   437→          {/* Board + Dice Column */}
+   438→          <div className="flex flex-col items-center gap-2 sm:gap-3 flex-shrink-0">
+   439→            <LudoBoard
+   440→              gameState={gameState}
+   441→              validMoves={validMoves}
+   442→              onPieceClick={handlePieceClick}
+   443→              myColor={playerColor}
+   444→            />
+   445→
+   446→            {/* Dice below board */}
+   447→            <LudoDice
+   448→              value={diceValue}
+   449→              rolling={false}
+   450→              onRoll={handleRoll}
+   451→              disabled={!isMyTurn || diceRolled || !!winner}
+   452→              currentColor={currentPlayerColor}
+   453→            />
+   454→
+   455→            {/* Mobile: Last Action */}
+   456→            <div className="sm:hidden w-full max-w-xs">
+   457→              <AnimatePresence mode="wait">
+   458→                {lastAction && (
+   459→                  <motion.div
+   460→                    key={lastAction}
+   461→                    initial={{ opacity: 0, y: 5 }}
+   462→                    animate={{ opacity: 1, y: 0 }}
+   463→                    exit={{ opacity: 0, y: -5 }}
+   464→                    className="text-[11px] text-center text-gray-400 py-1.5 px-3 bg-gray-50/80 rounded-lg border border-gray-100 font-medium"
+   465→                  >
+   466→                    {lastAction}
+   467→                  </motion.div>
+   468→                )}
+   469→              </AnimatePresence>
+   470→            </div>
+   471→          </div>
+   472→
+   473→          {/* Desktop Side Panel */}
+   474→          <div className="hidden lg:block w-72 shrink-0 pt-2">
+   475→            <PlayerPanel />
+   476→          </div>
+   477→        </div>
+   478→      </main>
+   479→
+   480→      {/* ==================== MOBILE BOTTOM BAR ==================== */}
+   481→      <div className="lg:hidden bg-white/90 backdrop-blur-md border-t border-gray-200/80 px-3 py-2 flex items-center justify-between safe-area-bottom">
+   482→        <div className="flex items-center gap-2 min-w-0">
+   483→          <motion.div
+   484→            key={currentPlayerColor}
+   485→            animate={isMyTurn ? { scale: [1, 1.2, 1] } : {}}
+   486→            transition={{ duration: 1, repeat: Infinity }}
+   487→            className="w-2.5 h-2.5 rounded-full shrink-0"
+   488→            style={{ backgroundColor: PLAYER_COLOR_HEX[currentPlayerColor || 'red'] }}
+   489→          />
+   490→          <span className="text-xs font-semibold text-gray-600 truncate">
+   491→            {winner ? (
+   492→              <span style={{ color: PLAYER_COLOR_HEX[winner] }}>🏆 {winnerName} Wins!</span>
+   493→            ) : isMyTurn ? (
+   494→              <span className="text-green-600">
+   495→                <Zap className="w-3 h-3 inline -mt-0.5 mr-0.5" />
+   496→                Your Turn{diceRolled ? ' — Tap!' : ' — Roll!'}
+   497→              </span>
+   498→            ) : (
+   499→              <span className="text-gray-400">{currentPlayerName}&apos;s turn</span>
+   500→            )}
+   501→          </span>
+   502→        </div>
+   503→
+   504→        {/* Mini player color dots */}
+   505→        <div className="flex items-center gap-1">
+   506→          {gameState?.players.map((p) => (
+   507→            <motion.div
+   508→              key={p.color}
+   509→              animate={p.color === currentPlayerColor && !winner ? { scale: [1, 1.15, 1] } : { scale: 1 }}
+   510→              transition={{ duration: 1.5, repeat: p.color === currentPlayerColor && !winner ? Infinity : 0 }}
+   511→              className="w-3 h-3 rounded-full border border-white shadow-sm"
+   512→              style={{
+   513→                backgroundColor: PLAYER_COLOR_HEX[p.color],
+   514→                opacity: p.color === currentPlayerColor ? 1 : 0.5,
+   515→              }}
+   516→            />
+   517→          ))}
+   518→        </div>
+   519→
+   520→        {/* Mobile Players Drawer Trigger */}
+   521→        <Drawer open={drawerOpen} onOpenChange={setDrawerOpen}>
+   522→          <DrawerTrigger asChild>
+   523→            <Button
+   524→              variant="outline"
+   525→              size="sm"
+   526→              className="h-7 px-2.5 text-[11px] font-semibold gap-1 border-gray-200"
+   527→            >
+   528→              <Users className="w-3 h-3" />
+   529→              <ChevronUp className="w-2.5 h-2.5 text-gray-400" />
+   530→            </Button>
+   531→          </DrawerTrigger>
+   532→          <DrawerContent className="max-h-[70vh]">
+   533→            <DrawerHeader className="text-center">
+   534→              <DrawerTitle className="flex items-center justify-center gap-2">
+   535→                <Users className="w-4 h-4 text-gray-400" />
+   536→                Players
+   537→              </DrawerTitle>
+   538→            </DrawerHeader>
+   539→            <div className="px-4 pb-8">
+   540→              <PlayerPanel />
+   541→            </div>
+   542→          </DrawerContent>
+   543→        </Drawer>
+   544→      </div>
+   545→
+   546→      {/* ==================== GAME CHAT ==================== */}
+   547→      <GameChat />
+   548→
+   549→      {/* ==================== WINNER CELEBRATION MODAL ==================== */}
+   550→      <AnimatePresence>
+   551→        {winner && (
+   552→          <motion.div
+   553→            initial={{ opacity: 0 }}
+   554→            animate={{ opacity: 1 }}
+   555→            exit={{ opacity: 0 }}
+   556→            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
+   557→          >
+   558→            <motion.div
+   559→              initial={{ scale: 0.7, opacity: 0, y: 40 }}
+   560→              animate={{ scale: 1, opacity: 1, y: 0 }}
+   561→              exit={{ scale: 0.85, opacity: 0, y: 20 }}
+   562→              transition={{ type: 'spring', stiffness: 300, damping: 22 }}
+   563→              className="bg-white rounded-3xl p-8 text-center shadow-2xl max-w-sm w-full relative overflow-hidden"
+   564→            >
+   565→              {/* Background glow */}
+   566→              <div
+   567→                className="absolute inset-0 opacity-[0.04]"
+   568→                style={{
+   569→                  background: `radial-gradient(circle at 50% 30%, ${PLAYER_COLOR_HEX[winner]}, transparent 70%)`,
+   570→                }}
+   571→              />
+   572→
+   573→              <div className="relative z-10">
+   574→                {/* Trophy with animation */}
+   575→                <motion.div
+   576→                  initial={{ y: -20, opacity: 0 }}
+   577→                  animate={{ y: 0, opacity: 1 }}
+   578→                  transition={{ delay: 0.2, type: 'spring', stiffness: 300 }}
+   579→                >
+   580→                  <motion.div
+   581→                    animate={{
+   582→                      rotate: [0, -8, 8, -5, 5, 0],
+   583→                      scale: [1, 1.1, 1],
+   584→                    }}
+   585→                    transition={{
+   586→                      duration: 1.5,
+   587→                      delay: 0.4,
+   588→                      repeat: Infinity,
+   589→                      repeatDelay: 2,
+   590→                      ease: 'easeInOut',
+   591→                    }}
+   592→                    className="inline-block"
+   593→                  >
+   594→                    <div
+   595→                      className="w-20 h-20 mx-auto rounded-full flex items-center justify-center shadow-lg"
+   596→                      style={{
+   597→                        background: `linear-gradient(135deg, ${PLAYER_COLOR_HEX[winner]}20, ${PLAYER_COLOR_HEX[winner]}05)`,
+   598→                        border: `2px solid ${PLAYER_COLOR_HEX[winner]}30`,
+   599→                      }}
+   600→                    >
+   601→                      <Trophy
+   602→                        className="w-10 h-10"
+   603→                        style={{ color: PLAYER_COLOR_HEX[winner] }}
+   604→                      />
+   605→                    </div>
+   606→                  </motion.div>
+   607→                </motion.div>
+   608→
+   609→                {/* Title */}
+   610→                <motion.h2
+   611→                  initial={{ y: 10, opacity: 0 }}
+   612→                  animate={{ y: 0, opacity: 1 }}
+   613→                  transition={{ delay: 0.4 }}
+   614→                  className="text-2xl font-black text-gray-900 mt-5"
+   615→                >
+   616→                  Game Over!
+   617→                </motion.h2>
+   618→
+   619→                {/* Winner Name */}
+   620→                <motion.div
+   621→                  initial={{ y: 10, opacity: 0 }}
+   622→                  animate={{ y: 0, opacity: 1 }}
+   623→                  transition={{ delay: 0.55 }}
+   624→                >
+   625→                  <p
+   626→                    className="text-xl font-black mt-2"
+   627→                    style={{ color: PLAYER_COLOR_HEX[winner] }}
+   628→                  >
+   629→                    {winnerName}
+   630→                  </p>
+   631→                  <p className="text-sm text-gray-400 mt-0.5 font-medium">
+   632→                    Wins the game! 🎉
+   633→                  </p>
+   634→                </motion.div>
+   635→
+   636→                {/* Color pieces indicator */}
+   637→                <motion.div
+   638→                  initial={{ y: 10, opacity: 0 }}
+   639→                  animate={{ y: 0, opacity: 1 }}
+   640→                  transition={{ delay: 0.7 }}
+   641→                  className="flex items-center justify-center gap-1.5 mt-4"
+   642→                >
+   643→                  {[0, 1, 2, 3].map((i) => (
+   644→                    <motion.div
+   645→                      key={i}
+   646→                      initial={{ scale: 0 }}
+   647→                      animate={{ scale: 1 }}
+   648→                      transition={{ delay: 0.8 + i * 0.1, type: 'spring' }}
+   649→                      className="w-4 h-4 rounded-full shadow-sm"
+   650→                      style={{
+   651→                        backgroundColor: PLAYER_COLOR_HEX[winner],
+   652→                        boxShadow: `0 0 8px ${PLAYER_COLOR_HEX[winner]}50`,
+   653→                      }}
+   654→                    />
+   655→                  ))}
+   656→                </motion.div>
+   657→
+   658→                {/* Action Buttons */}
+   659→                <motion.div
+   660→                  initial={{ y: 15, opacity: 0 }}
+   661→                  animate={{ y: 0, opacity: 1 }}
+   662→                  transition={{ delay: 0.9 }}
+   663→                  className="flex gap-3 mt-7"
+   664→                >
+   665→                  <Button
+   666→                    variant="outline"
+   667→                    onClick={leaveRoom}
+   668→                    className="flex-1 h-11 font-semibold border-gray-200 text-gray-600 hover:text-red-600 hover:border-red-200 hover:bg-red-50 transition-colors"
+   669→                  >
+   670→                    <LogOut className="w-4 h-4 mr-2" />
+   671→                    Leave Room
+   672→                  </Button>
+   673→                  <Button
+   674→                    onClick={restartGame}
+   675→                    className="flex-1 h-11 font-bold text-white transition-all hover:shadow-lg"
+   676→                    style={{
+   677→                      background: `linear-gradient(135deg, ${PLAYER_COLOR_HEX[winner]}, ${PLAYER_COLOR_HEX[winner]}CC)`,
+   678→                    }}
+   679→                  >
+   680→                    <RotateCcw className="w-4 h-4 mr-2" />
+   681→                    Play Again
+   682→                  </Button>
+   683→                </motion.div>
+   684→              </div>
+   685→            </motion.div>
+   686→          </motion.div>
+   687→        )}
+   688→      </AnimatePresence>
+   689→    </div>
+   690→  );
+   691→}
