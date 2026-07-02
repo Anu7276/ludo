@@ -189,12 +189,15 @@ export default function GameView() {
     await rollDice();
   }, [rollDice]);
 
-  // Auto-roll for extra turns
+  // Auto-move: if only one piece can move, auto-move it after a short delay
   useEffect(() => {
-    if (isMyTurn && diceRolled && validMoves.length === 0 && gamePhase === 'playing') {
-      // Server handles auto-pass
+    if (isMyTurn && diceRolled && validMoves.length === 1 && gamePhase === 'playing' && !winner) {
+      const timer = setTimeout(() => {
+        movePiece(validMoves[0]);
+      }, 400);
+      return () => clearTimeout(timer);
     }
-  }, [isMyTurn, diceRolled, validMoves, gamePhase]);
+  }, [isMyTurn, diceRolled, validMoves, gamePhase, winner, movePiece]);
 
   if (!gameState) return null;
 
@@ -203,7 +206,7 @@ export default function GameView() {
   return (
     <div className="h-[100dvh] flex flex-col bg-gradient-to-br from-gray-50 via-white to-gray-100 overflow-hidden">
       {/* ==================== GAME HEADER ==================== */}
-      <header className="bg-white/90 backdrop-blur-md border-b border-gray-200/80 px-4 py-2.5 flex items-center justify-between sticky top-0 z-20">
+      <header className="bg-white/90 backdrop-blur-md border-b border-gray-200/80 px-3 py-1.5 flex items-center justify-between sticky top-0 z-20 shrink-0">
         <div className="flex items-center gap-3">
           {/* Player color indicator + Logo */}
           <div className="relative">
@@ -351,7 +354,7 @@ export default function GameView() {
       </header>
 
       {/* ==================== STATUS BAR ==================== */}
-      <div className="bg-white/60 backdrop-blur-sm border-b border-gray-100 px-4 py-2">
+      <div className="bg-white/60 backdrop-blur-sm border-b border-gray-100 px-3 py-1 shrink-0">
         <div className="max-w-5xl mx-auto flex items-center justify-between gap-3">
           {/* Current Turn Indicator */}
           <div className="flex items-center gap-2 min-w-0">
@@ -432,10 +435,10 @@ export default function GameView() {
       </div>
 
       {/* ==================== MAIN CONTENT ==================== */}
-      <main className="flex-1 flex items-center justify-center p-2 sm:p-4 lg:p-6 overflow-hidden">
-        <div className="max-w-5xl w-full flex flex-col lg:flex-row items-center lg:items-start justify-center gap-2 sm:gap-4 lg:gap-6">
-          {/* Board + Dice Column */}
-          <div className="flex flex-col items-center gap-2 sm:gap-3 flex-shrink-0">
+      <main className="flex-1 flex items-center justify-center overflow-hidden">
+        <div className="w-full h-full flex flex-col lg:flex-row items-center lg:items-center justify-center gap-1 sm:gap-2 lg:gap-5 p-1 sm:p-3 lg:p-4">
+          {/* Board Column - takes as much space as possible */}
+          <div className="flex flex-col items-center gap-1.5 sm:gap-2 flex-1 min-h-0 justify-center">
             <LudoBoard
               gameState={gameState}
               validMoves={validMoves}
@@ -461,7 +464,7 @@ export default function GameView() {
                     initial={{ opacity: 0, y: 5 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -5 }}
-                    className="text-[11px] text-center text-gray-400 py-1.5 px-3 bg-gray-50/80 rounded-lg border border-gray-100 font-medium"
+                    className="text-[11px] text-center text-gray-400 py-1 px-3 bg-gray-50/80 rounded-lg border border-gray-100 font-medium"
                   >
                     {lastAction}
                   </motion.div>
@@ -471,14 +474,14 @@ export default function GameView() {
           </div>
 
           {/* Desktop Side Panel */}
-          <div className="hidden lg:block w-72 shrink-0 pt-2">
+          <div className="hidden lg:flex w-72 shrink-0 max-h-[85vh] overflow-y-auto">
             <PlayerPanel />
           </div>
         </div>
       </main>
 
       {/* ==================== MOBILE BOTTOM BAR ==================== */}
-      <div className="lg:hidden bg-white/90 backdrop-blur-md border-t border-gray-200/80 px-3 py-2 flex items-center justify-between safe-area-bottom">
+      <div className="lg:hidden bg-white/90 backdrop-blur-md border-t border-gray-200/80 px-3 py-1.5 flex items-center justify-between safe-area-bottom shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           <motion.div
             key={currentPlayerColor}

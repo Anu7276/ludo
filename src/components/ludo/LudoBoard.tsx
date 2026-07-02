@@ -419,7 +419,7 @@ export default function LudoBoard({
   );
 
   return (
-    <div className="w-full mx-auto select-none" style={{ maxWidth: 'min(600px, 88vw, 60dvh)' }}>
+    <div className="w-full mx-auto select-none" style={{ maxWidth: 'min(85vw, 82dvh, 680px)' }}>
       {/* Premium outer frame */}
       <div
         className="rounded-2xl p-1 sm:p-[7px]"
