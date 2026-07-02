@@ -5,6 +5,14 @@ This project deploys as two Cloud Run services:
 - `ludo-service`: Socket.IO realtime game server with Firestore snapshots.
 - `ludo-web`: Next.js frontend.
 
+## Current Deployment
+
+Project: `gen-lang-client-0234977408`
+Region: `asia-south1`
+
+- Web app: `https://ludo-web-illg3ukkca-el.a.run.app`
+- Realtime service: `https://ludo-service-illg3ukkca-el.a.run.app`
+
 Cloud Run supports WebSockets, but each connection is a long-running request. For a small friend group, keep the realtime service on one instance so all players in a room share the same in-memory Socket.IO process.
 
 ## Prerequisites
