@@ -82,11 +82,10 @@ export default function GameView() {
   useEffect(() => {
     if (timerInterval.current) clearInterval(timerInterval.current);
     timerInterval.current = null;
+    const resetTimer = setTimeout(() => setTurnTimer(30), 0);
     if (!isActive) {
-      setTurnTimer(30);
-      return;
+      return () => clearTimeout(resetTimer);
     }
-    setTurnTimer(30);
     const startTime = Date.now();
     timerInterval.current = setInterval(() => {
       const elapsed = Math.floor((Date.now() - startTime) / 1000);
@@ -99,6 +98,7 @@ export default function GameView() {
       }
     }, 250);
     return () => {
+      clearTimeout(resetTimer);
       if (timerInterval.current) {
         clearInterval(timerInterval.current);
         timerInterval.current = null;

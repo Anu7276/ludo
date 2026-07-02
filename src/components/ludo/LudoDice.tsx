@@ -103,9 +103,11 @@ export default function LudoDice({
 
   /* ── rolling face randomiser ──────────────────────────────── */
   useEffect(() => {
+    let startTimeout: ReturnType<typeof setTimeout> | null = null;
     if (rolling) {
-      setLocalRolling(true);
-      setSettling(false);
+      startTimeout = setTimeout(() => {
+        setLocalRolling(true);
+        setSettling(false);
       let tick = 0;
       intervalRef.current = setInterval(() => {
         tick++;
@@ -117,8 +119,10 @@ export default function LudoDice({
           setSettling(true);
         }
       }, 70);
+      }, 0);
     }
     return () => {
+      if (startTimeout) clearTimeout(startTimeout);
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
   }, [rolling, value]);
