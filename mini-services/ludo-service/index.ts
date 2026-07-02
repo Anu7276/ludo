@@ -307,96 +307,127 @@ function getAllRooms(): RoomInfo[] {
 // ============ BOT AI ============
 
 function handleBotTurn(io: Server, roomId: string, playerIndex: number) {
-  const state = rooms.get(roomId);
-  if (!state) return;
-  
-  const player = state.players[playerIndex];
-  if (!player || !player.isBot) return;
-  
-  // Delay for realism
-  setTimeout(() => {
-    if (!rooms.has(roomId)) return;
-    const currentState = rooms.get(roomId)!;
-    if (currentState.phase !== 'playing' || currentState.currentPlayerIndex !== playerIndex) return;
+  try {
+    const state = rooms.get(roomId);
+    if (!state) return;
     
-    // Roll dice
-    const diceValue = rollDice(currentState);
-    io.to(roomId).emit('dice:rolled', {
-      playerId: player.id,
-      playerColor: player.color,
-      value: diceValue,
-    });
+    const player = state.players[playerIndex];
+    if (!player || !player.isBot) return;
     
-    // Get valid moves
-    const validMoves = getValidMoves(currentState, playerIndex, diceValue);
-    
-    if (validMoves.length === 0) {
-      // No valid moves, pass turn
-      setTimeout(() => {
-        if (!rooms.has(roomId)) return;
-        const s = rooms.get(roomId)!;
-        s.turnHistory.push({
-          playerId: player.id, playerColor: player.color,
-          diceValue, pieceIndex: -1, fromSteps: 0, toSteps: 0,
-          captured: null, timestamp: Date.now(),
-        });
-        io.to(roomId).emit('turn:noMoves', { playerId: player.id, playerColor: player.color, diceValue });
-        nextTurn(s, false);
-        io.to(roomId).emit('game:stateUpdate', serializeGameState(s));
-        
-        // Check next player for bot
-        const nextP = s.players[s.currentPlayerIndex];
-        if (nextP?.isBot && s.phase === 'playing') {
-          handleBotTurn(io, roomId, s.currentPlayerIndex);
-        }
-      }, 800);
-      return;
-    }
-    
-    // Select move
-    const moveIdx = autoSelectMove(currentState, playerIndex, diceValue);
-    
+    // Delay for realism
     setTimeout(() => {
-      if (!rooms.has(roomId)) return;
-      const s = rooms.get(roomId)!;
-      if (s.phase !== 'playing' || s.currentPlayerIndex !== playerIndex) return;
-      
-      const result = executeMove(s, playerIndex, moveIdx, diceValue);
-      
-      s.turnHistory.push({
-        playerId: player.id, playerColor: player.color,
-        diceValue, pieceIndex: moveIdx,
-        fromSteps: result.fromSteps, toSteps: result.toSteps,
-        captured: result.captured || null, timestamp: Date.now(),
-      });
-      
-      io.to(roomId).emit('piece:moved', {
-        playerId: player.id, playerColor: player.color,
-        pieceIndex: moveIdx, fromSteps: result.fromSteps, toSteps: result.toSteps,
-        captured: result.captured || null, enteredBoard: result.enteredBoard,
-        reachedHome: result.reachedHome,
-      });
-      
-      if (s.phase === 'finished') {
-        io.to(roomId).emit('game:finished', { winner: s.winner, winnerName: player.name });
-        io.to(roomId).emit('game:stateUpdate', serializeGameState(s));
-        return;
-      }
-      
-      const hadExtraTurn = result.extraTurn && result.success;
-      nextTurn(s, hadExtraTurn);
-      io.to(roomId).emit('game:stateUpdate', serializeGameState(s));
-      
-      if (hadExtraTurn) {
-        handleBotTurn(io, roomId, s.currentPlayerIndex);
-      } else {
-        const nextP = s.players[s.currentPlayerIndex];
-        if (nextP?.isBot && s.phase === 'playing') {
-          handleBotTurn(io, roomId, s.currentPlayerIndex);
+      try {
+        if (!rooms.has(roomId)) return;
+        const currentState = rooms.get(roomId)!;
+        if (currentState.phase !== 'playing' || currentState.currentPlayerIndex !== playerIndex) return;
+        
+        // Roll dice
+        const diceValue = rollDice(currentState);
+        io.to(roomId).emit('dice:rolled', {
+          playerId: player.id,
+          playerColor: player.color,
+          value: diceValue,
+        });
+        
+        // Get valid moves
+        const validMoves = getValidMoves(currentState, playerIndex, diceValue);
+        
+        if (validMoves.length === 0) {
+          // No valid moves, pass turn
+          setTimeout(() => {
+            try {
+              if (!rooms.has(roomId)) return;
+              const s = rooms.get(roomId)!;
+              s.turnHistory.push({
+                playerId: player.id, playerColor: player.color,
+                diceValue, pieceIndex: -1, fromSteps: 0, toSteps: 0,
+                captured: null, timestamp: Date.now(),
+              });
+              io.to(roomId).emit('turn:noMoves', { playerId: player.id, playerColor: player.color, diceValue });
+              nextTurn(s, false);
+              io.to(roomId).emit('game:stateUpdate', serializeGameState(s));
+              
+              // Schedule next bot turn
+              const nextP = s.players[s.currentPlayerIndex];
+              if (nextP?.isBot && s.phase === 'playing') {
+                setTimeout(() => handleBotTurn(io, roomId, s.currentPlayerIndex), 600);
+              }
+            } catch (err) {
+              console.error('[Ludo] Bot turn error (no moves):', err);
+            }
+          }, 800);
+          return;
         }
+        
+        // Select move
+        const moveIdx = autoSelectMove(currentState, playerIndex, diceValue);
+        
+        setTimeout(() => {
+          try {
+            if (!rooms.has(roomId)) return;
+            const s = rooms.get(roomId)!;
+            if (s.phase !== 'playing' || s.currentPlayerIndex !== playerIndex) return;
+            
+            const result = executeMove(s, playerIndex, moveIdx, diceValue);
+            
+            s.turnHistory.push({
+              playerId: player.id, playerColor: player.color,
+              diceValue, pieceIndex: moveIdx,
+              fromSteps: result.fromSteps, toSteps: result.toSteps,
+              captured: result.captured || null, timestamp: Date.now(),
+            });
+            
+            io.to(roomId).emit('piece:moved', {
+              playerId: player.id, playerColor: player.color,
+              pieceIndex: moveIdx, fromSteps: result.fromSteps, toSteps: result.toSteps,
+              captured: result.captured || null, enteredBoard: result.enteredBoard,
+              reachedHome: result.reachedHome,
+            });
+            
+            if (s.phase === 'finished') {
+              io.to(roomId).emit('game:finished', { winner: s.winner, winnerName: player.name });
+              io.to(roomId).emit('game:stateUpdate', serializeGameState(s));
+              return;
+            }
+            
+            const hadExtraTurn = result.extraTurn && result.success;
+            nextTurn(s, hadExtraTurn);
+            io.to(roomId).emit('game:stateUpdate', serializeGameState(s));
+            
+            // Schedule next bot turn (not recursive to avoid stack overflow)
+            const delay = hadExtraTurn ? 600 : 1200;
+            setTimeout(() => {
+              try {
+                if (!rooms.has(roomId)) return;
+                const ns = rooms.get(roomId)!;
+                if (ns.phase !== 'playing') return;
+                const nextP = ns.players[ns.currentPlayerIndex];
+                if (nextP?.isBot) {
+                  handleBotTurn(io, roomId, ns.currentPlayerIndex);
+                }
+              } catch (err) {
+                console.error('[Ludo] Bot chain error:', err);
+              }
+            }, delay);
+          } catch (err) {
+            console.error('[Ludo] Bot move error:', err);
+            // Try to recover by advancing turn
+            try {
+              if (rooms.has(roomId)) {
+                const s = rooms.get(roomId)!;
+                nextTurn(s, false);
+                io.to(roomId).emit('game:stateUpdate', serializeGameState(s));
+              }
+            } catch (e) { /* give up */ }
+          }
+        }, 1000);
+      } catch (err) {
+        console.error('[Ludo] Bot roll error:', err);
       }
-    }, 1000);
-  }, 1200);
+    }, 1200);
+  } catch (err) {
+    console.error('[Ludo] handleBotTurn error:', err);
+  }
 }
 
 function serializeGameState(state: GameState): any {
@@ -573,7 +604,7 @@ io.on('connection', (socket) => {
     callback({ success: true });
     io.to(info.roomId).emit('game:started', { gameState: serializeGameState(state) });
     io.to(info.roomId).emit('game:stateUpdate', serializeGameState(state));
-    console.log(`[Ludo] Game started in room ${roomCodes.get(info.roomId)}`);
+    console.log(`[Ludo] Game started in room ${info.roomId}`);
     
     // If first player is a bot, handle their turn
     const firstPlayer = state.players[0];

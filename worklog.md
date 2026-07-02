@@ -165,5 +165,5 @@ Stage Summary:
 ### Risks/Next Steps
 - Firebase/Google Cloud integration not yet added (user will add later)
 - No persistent game history (in-memory only)
-- Could add: turn timer, player avatars, game replays, rankings, smarter bot AI
-- Bot AI could be made smarter with more strategic decision-making
+- Could add: player avatars, game replays, rankings, smarter bot AI
+- Could add: WebSocket reconnection with game state recovery

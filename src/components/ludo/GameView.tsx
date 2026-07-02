@@ -43,6 +43,7 @@ import {
   Dices,
   ChevronUp,
   Zap,
+  Clock,
 } from 'lucide-react';
 
 // Dice face unicode symbols
@@ -74,6 +75,31 @@ export default function GameView() {
   const soundMutedRef = useRef(soundMuted);
   const confettiFired = useRef(false);
   const winnerRef = useRef<PlayerColor | null>(null);
+  const [turnTimer, setTurnTimer] = useState(30);
+  const timerInterval = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Turn countdown timer  
+  const isActive = isMyTurn && !diceRolled && !winner && gamePhase === 'playing';
+  useEffect(() => {
+    if (timerInterval.current) clearInterval(timerInterval.current);
+    timerInterval.current = null;
+    if (!isActive) return;
+    const startTime = Date.now();
+    timerInterval.current = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      setTurnTimer(Math.max(0, 30 - elapsed));
+      if (30 - elapsed <= 0 && timerInterval.current) {
+        clearInterval(timerInterval.current);
+        timerInterval.current = null;
+      }
+    }, 250);
+    return () => {
+      if (timerInterval.current) {
+        clearInterval(timerInterval.current);
+        timerInterval.current = null;
+      }
+    };
+  }, [isActive]);
 
   // Keep soundMuted ref in sync
   useEffect(() => {
@@ -370,6 +396,20 @@ export default function GameView() {
               </div>
             )}
           </div>
+
+          {/* Turn Timer (when it's player's turn and hasn't rolled) */}
+          {isMyTurn && !diceRolled && !winner && (
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Clock className="w-3.5 h-3.5 text-gray-400" />
+              <span
+                className={`text-sm font-mono font-bold tabular-nums ${
+                  turnTimer <= 10 ? 'text-red-500 animate-pulse' : turnTimer <= 20 ? 'text-amber-500' : 'text-gray-500'
+                }`}
+              >
+                {turnTimer}s
+              </span>
+            </div>
+          )}
 
           {/* Last Action (hidden on small mobile) */}
           <div className="hidden sm:flex items-center gap-1.5 min-w-0 max-w-[200px]">
