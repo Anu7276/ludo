@@ -66,6 +66,8 @@ gcloud run deploy ludo-web \
 
 Open the `ludo-web` URL, create a room, and share the room code with friends.
 
+Note: `NEXT_PUBLIC_*` values are normally baked into the client bundle at build time. The app also includes a Cloud Run fallback to the current `ludo-service` URL so the deployed frontend can connect even when Cloud Run runtime env vars are not available during the Next.js build.
+
 ## Firebase Rules
 
 The app writes Firestore only through the Admin SDK in Cloud Run, so client access is denied by default in `firestore.rules`.

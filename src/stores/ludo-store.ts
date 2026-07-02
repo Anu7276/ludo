@@ -146,10 +146,17 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
     set({ connectionStatus: 'connecting' });
 
     const configuredSocketUrl = process.env.NEXT_PUBLIC_LUDO_SOCKET_URL;
+    const isLocalDev =
+      typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    const isCloudRunWeb =
+      typeof window !== 'undefined' && window.location.hostname.endsWith('.run.app');
     const socketUrl =
       configuredSocketUrl ||
-      (typeof window !== 'undefined' && window.location.port === '3000'
+      (isLocalDev && window.location.port === '3000'
         ? 'http://localhost:3003'
+        : isCloudRunWeb
+        ? 'https://ludo-service-illg3ukkca-el.a.run.app'
         : '/?XTransformPort=3003');
 
     const socket = io(socketUrl, {
