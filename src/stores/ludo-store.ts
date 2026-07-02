@@ -102,7 +102,7 @@ interface LudoStore {
   _setGameState: (state: SerializedGameState) => void;
   _setRoomPlayers: (players: RoomPlayer[], hostId: string) => void;
   _setError: (error: string | null) => void;
-  _setDiceValue: (value: number | null, playerColor: PlayerColor) => void;
+  _setDiceValue: (value: number | null) => void;
   _setValidMoves: (moves: number[]) => void;
 }
 
@@ -208,7 +208,7 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
     });
 
     socket.on('dice:rolled', (data: { playerId: string; playerColor: PlayerColor; value: number }) => {
-      get()._setDiceValue(data.value, data.playerColor);
+      get()._setDiceValue(data.value);
       const { playerId } = get();
       if (data.playerId === playerId) {
         // Get valid moves

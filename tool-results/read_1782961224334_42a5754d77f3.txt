@@ -1,0 +1,718 @@
+     1→     1→'use client';
+     2→     2→
+     3→     3→import React, { useMemo } from 'react';
+     4→     4→import { motion } from 'framer-motion';
+     5→     5→import {
+     6→     6→  PlayerColor,
+     7→     7→  PLAYER_COLOR_HEX,
+     8→     8→  PLAYER_COLOR_LIGHT,
+     9→     9→  PLAYER_COLOR_DARK,
+    10→    10→} from '@/lib/ludo/types';
+    11→    11→import type { SerializedGameState } from '@/stores/ludo-store';
+    12→    12→import {
+    13→    13→  MAIN_PATH,
+    14→    14→  HOME_COLUMNS,
+    15→    15→  PLAYER_START_INDEX,
+    16→    16→  getPiecePosition,
+    17→    17→} from '@/lib/ludo/board';
+    18→    18→
+    19→    19→// ─────────────────────────────────────────────────────────────────────────────
+    20→    20→// PROPS
+    21→    21→// ─────────────────────────────────────────────────────────────────────────────
+    22→    22→
+    23→    23→interface LudoBoardProps {
+    24→    24→  gameState: SerializedGameState | null;
+    25→    25→  validMoves: number[];
+    26→    26→  onPieceClick: (color: PlayerColor, pieceIndex: number) => void;
+    27→    27→  myColor: PlayerColor | null;
+    28→    28→}
+    29→    29→
+    30→    30→// ─────────────────────────────────────────────────────────────────────────────
+    31→    31→// MODULE-LEVEL LOOKUP TABLES (built once, never change)
+    32→    32→// ─────────────────────────────────────────────────────────────────────────────
+    33→    33→
+    34→    34→/** Set of "row,col" strings for every main-path cell. */
+    35→    35→const MAIN_PATH_SET = new Set(MAIN_PATH.map(([r, c]) => `${r},${c}`));
+    36→    36→
+    37→    37→/** Map from "row,col" → { color, index } for home-column cells. */
+    38→    38→const HOME_COL_MAP = new Map<string, { color: PlayerColor; index: number }>();
+    39→    39→for (const color of ['red', 'green', 'yellow', 'blue'] as PlayerColor[]) {
+    40→    40→  HOME_COLUMNS[color].forEach(([r, c], index) => {
+    41→    41→    HOME_COL_MAP.set(`${r},${c}`, { color, index });
+    42→    42→  });
+    43→    43→}
+    44→    44→
+    45→    45→/** Map from "row,col" → PlayerColor for start positions. */
+    46→    46→const START_MAP = new Map<string, PlayerColor>();
+    47→    47→for (const color of ['red', 'green', 'yellow', 'blue'] as PlayerColor[]) {
+    48→    48→  const [r, c] = MAIN_PATH[PLAYER_START_INDEX[color]];
+    49→    49→  START_MAP.set(`${r},${c}`, color);
+    50→    50→}
+    51→    51→
+    52→    52→/** Map from "row,col" → PlayerColor for star safe-zone cells (non-start). */
+    53→    53→const STAR_MAP = new Map<string, PlayerColor>();
+    54→    54→const STAR_PATH_INDICES = [8, 21, 34, 47];
+    55→    55→const STAR_PLAYER_COLORS: PlayerColor[] = ['red', 'green', 'yellow', 'blue'];
+    56→    56→for (let i = 0; i < STAR_PATH_INDICES.length; i++) {
+    57→    57→  const [r, c] = MAIN_PATH[STAR_PATH_INDICES[i]];
+    58→    58→  STAR_MAP.set(`${r},${c}`, STAR_PLAYER_COLORS[i]);
+    59→    59→}
+    60→    60→
+    61→    61→/** Map from "row,col" → PlayerColor for home-column entry cells. */
+    62→    62→const ENTRY_MAP = new Map<string, PlayerColor>([
+    63→    63→  ['7,6', 'red'],
+    64→    64→  ['6,7', 'green'],
+    65→    65→  ['7,8', 'yellow'],
+    66→    66→  ['8,7', 'blue'],
+    67→    67→]);
+    68→    68→
+    69→    69→/** Grid cells that hold a home-base circle (where pieces sit in "home" state). */
+    70→    70→const HOME_CIRCLE_CELLS: Record<PlayerColor, [number, number][]> = {
+    71→    71→  red: [[1, 1], [1, 4], [4, 1], [4, 4]],
+    72→    72→  green: [[1, 10], [1, 13], [4, 10], [4, 13]],
+    73→    73→  yellow: [[10, 10], [10, 13], [13, 10], [13, 13]],
+    74→    74→  blue: [[10, 1], [10, 4], [13, 1], [13, 4]],
+    75→    75→};
+    76→    76→const HOME_CIRCLE_SET = new Set<string>();
+    77→    77→for (const color of ['red', 'green', 'yellow', 'blue'] as PlayerColor[]) {
+    78→    78→  for (const [r, c] of HOME_CIRCLE_CELLS[color]) {
+    79→    79→    HOME_CIRCLE_SET.add(`${r},${c}`);
+    80→    80→  }
+    81→    81→}
+    82→    82→
+    83→    83→/** Map from "row,col" → PlayerColor for the four 6×6 home-base areas. */
+    84→    84→const HOME_BASE_MAP = new Map<string, PlayerColor>();
+    85→    85→for (let r = 0; r <= 5; r++)
+    86→    86→  for (let c = 0; c <= 5; c++) HOME_BASE_MAP.set(`${r},${c}`, 'red');
+    87→    87→for (let r = 0; r <= 5; r++)
+    88→    88→  for (let c = 9; c <= 14; c++) HOME_BASE_MAP.set(`${r},${c}`, 'green');
+    89→    89→for (let r = 9; r <= 14; r++)
+    90→    90→  for (let c = 9; c <= 14; c++) HOME_BASE_MAP.set(`${r},${c}`, 'yellow');
+    91→    91→for (let r = 9; r <= 14; r++)
+    92→    92→  for (let c = 0; c <= 5; c++) HOME_BASE_MAP.set(`${r},${c}`, 'blue');
+    93→    93→
+    94→    94→/** The four "cross-inner" cells in the 3×3 center that aren't center/entry. */
+    95→    95→const CROSS_INNER_SET = new Set(['6,6', '6,8', '8,6', '8,8']);
+    96→    96→
+    97→    97→/** Small pixel offsets to separate stacked pieces. */
+    98→    98→const STACK_OFFSETS = [
+    99→    99→  { x: -5, y: -5 },
+   100→   100→  { x: 5, y: -5 },
+   101→   101→  { x: -5, y: 5 },
+   102→   102→  { x: 5, y: 5 },
+   103→   103→  { x: 0, y: -6 },
+   104→   104→  { x: 0, y: 6 },
+   105→   105→  { x: -6, y: 0 },
+   106→   106→  { x: 6, y: 0 },
+   107→   107→];
+   108→   108→
+   109→   109→/** Direction of initial movement for each player's arrow. */
+   110→   110→const ARROW_DIRECTION: Record<PlayerColor, number> = {
+   111→   111→  red: 0,   // →
+   112→   112→  green: 90, // ↓
+   113→   113→  yellow: 180, // ←
+   114→   114→  blue: 270,  // ↑
+   115→   115→};
+   116→   116→
+   117→   117→/** Home base arrow overlay positions (top%, left% in the board). */
+   118→   118→const HOME_ARROW_POS: Record<PlayerColor, { top: number; left: number }> = {
+   119→   119→  red:    { top: 13.3, left: 13.3 },
+   120→   120→  green:  { top: 13.3, left: 73.3 },
+   121→   121→  yellow: { top: 73.3, left: 73.3 },
+   122→   122→  blue:   { top: 73.3, left: 13.3 },
+   123→   123→};
+   124→   124→
+   125→   125→// ─────────────────────────────────────────────────────────────────────────────
+   126→   126→// SVG ICON COMPONENTS
+   127→   127→// ─────────────────────────────────────────────────────────────────────────────
+   128→   128→
+   129→   129→/** Five-pointed star for safe zones. */
+   130→   130→function StarIcon({ color }: { color: string }) {
+   131→   131→  return (
+   132→   132→    <svg
+   133→   133→      viewBox="0 0 24 24"
+   134→   134→      className="w-[72%] h-[72%]"
+   135→   135→      style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.2))' }}
+   136→   136→    >
+   137→   137→      <path
+   138→   138→        d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
+   139→   139→        fill={color}
+   140→   140→        stroke="rgba(0,0,0,0.12)"
+   141→   141→        strokeWidth="0.5"
+   142→   142→      />
+   143→   143→    </svg>
+   144→   144→  );
+   145→   145→}
+   146→   146→
+   147→   147→/** Chevron/arrow pointing in the direction of movement for start cells. */
+   148→   148→function StartArrow({ rotation }: { rotation: number }) {
+   149→   149→  return (
+   150→   150→    <svg
+   151→   151→      viewBox="0 0 24 24"
+   152→   152→      className="w-[65%] h-[65%]"
+   153→   153→      style={{ transform: `rotate(${rotation}deg)` }}
+   154→   154→    >
+   155→   155→      <path
+   156→   156→        d="M8 5l8 7-8 7"
+   157→   157→        fill="none"
+   158→   158→        stroke="rgba(255,255,255,0.9)"
+   159→   159→        strokeWidth="2.5"
+   160→   160→        strokeLinecap="round"
+   161→   161→        strokeLinejoin="round"
+   162→   162→      />
+   163→   163→    </svg>
+   164→   164→  );
+   165→   165→}
+   166→   166→
+   167→   167→/** Triangle arrow for home bases pointing toward start position. */
+   168→   168→function HomeBaseArrow({ color }: { color: PlayerColor }) {
+   169→   169→  const hex = PLAYER_COLOR_HEX[color];
+   170→   170→  const rot = ARROW_DIRECTION[color];
+   171→   171→  return (
+   172→   172→    <svg
+   173→   173→      viewBox="0 0 40 40"
+   174→   174→      style={{
+   175→   175→        width: '100%',
+   176→   176→        height: '100%',
+   177→   177→        transform: `rotate(${rot}deg)`,
+   178→   178→        filter: `drop-shadow(0 1px 2px rgba(0,0,0,0.15))`,
+   179→   179→      }}
+   180→   180→    >
+   181→   181→      <path
+   182→   182→        d="M4 14 L20 6 L20 14 L36 14 L36 26 L20 26 L20 34 L4 26 Z"
+   183→   183→        fill={hex}
+   184→   184→        opacity="0.35"
+   185→   185→      />
+   186→   186→    </svg>
+   187→   187→  );
+   188→   188→}
+   189→   189→
+   190→   190→/** Trophy icon for the center HOME cell. */
+   191→   191→function TrophyIcon() {
+   192→   192→  return (
+   193→   193→    <svg
+   194→   194→      viewBox="0 0 24 24"
+   195→   195→      className="w-[45%] h-[45%]"
+   196→   196→      style={{ filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.35))' }}
+   197→   197→    >
+   198→   198→      <path
+   199→   199→        d="M5 3h14v1.5C19 8 16.5 11 13 11.75V14h1.5a2 2 0 012 2v2h-2v2H9.5v-2h-2v-2a2 2 0 012-2H11v-2.25C7.5 11 5 8 5 4.5V3zm2.5 2v.5c0 2.2 1.2 4.1 3 4.65V5H7.5zm6 0v5.15c1.8-.55 3-2.45 3-4.65V5h-3z"
+   200→   200→        fill="white"
+   201→   201→        opacity="0.95"
+   202→   202→      />
+   203→   203→    </svg>
+   204→   204→  );
+   205→   205→}
+   206→   206→
+   207→   207→// ─────────────────────────────────────────────────────────────────────────────
+   208→   208→// CELL CLASSIFICATION
+   209→   209→// ─────────────────────────────────────────────────────────────────────────────
+   210→   210→
+   211→   211→type CellInfo =
+   212→   212→  | { kind: 'homeBase'; color: PlayerColor; zone: 'border' | 'inner' | 'circle' }
+   213→   213→  | { kind: 'path' }
+   214→   214→  | { kind: 'start'; color: PlayerColor }
+   215→   215→  | { kind: 'star'; color: PlayerColor }
+   216→   216→  | { kind: 'homeColumn'; color: PlayerColor; index: number; total: number }
+   217→   217→  | { kind: 'entry'; color: PlayerColor }
+   218→   218→  | { kind: 'center' }
+   219→   219→  | { kind: 'crossInner' };
+   220→   220→
+   221→   221→function classifyCell(row: number, col: number): CellInfo {
+   222→   222→  const k = `${row},${col}`;
+   223→   223→
+   224→   224→  if (row === 7 && col === 7) return { kind: 'center' };
+   225→   225→  if (ENTRY_MAP.has(k)) return { kind: 'entry', color: ENTRY_MAP.get(k)! };
+   226→   226→
+   227→   227→  const hc = HOME_COL_MAP.get(k);
+   228→   228→  if (hc) return { kind: 'homeColumn', color: hc.color, index: hc.index, total: 5 };
+   229→   229→
+   230→   230→  if (START_MAP.has(k)) return { kind: 'start', color: START_MAP.get(k)! };
+   231→   231→
+   232→   232→  if (MAIN_PATH_SET.has(k)) {
+   233→   233→    const sc = STAR_MAP.get(k);
+   234→   234→    return sc ? { kind: 'star', color: sc } : { kind: 'path' };
+   235→   235→  }
+   236→   236→
+   237→   237→  if (HOME_BASE_MAP.has(k)) {
+   238→   238→    const color = HOME_BASE_MAP.get(k)!;
+   239→   239→    // Compute relative position within the 6×6 area (0-5)
+   240→   240→    let rr: number, rc: number;
+   241→   241→    if (color === 'red')    { rr = row; rc = col; }
+   242→   242→    else if (color === 'green')  { rr = row; rc = col - 9; }
+   243→   243→    else if (color === 'yellow') { rr = row - 9; rc = col - 9; }
+   244→   244→    else /* blue */               { rr = row - 9; rc = col; }
+   245→   245→
+   246→   246→    const onBorder = rr === 0 || rr === 5 || rc === 0 || rc === 5;
+   247→   247→    if (HOME_CIRCLE_SET.has(k)) return { kind: 'homeBase', color, zone: 'circle' };
+   248→   248→    if (onBorder)                return { kind: 'homeBase', color, zone: 'border' };
+   249→   249→    return { kind: 'homeBase', color, zone: 'inner' };
+   250→   250→  }
+   251→   251→
+   252→   252→  if (CROSS_INNER_SET.has(k)) return { kind: 'crossInner' };
+   253→   253→
+   254→   254→  return { kind: 'path' };
+   255→   255→}
+   256→   256→
+   257→   257→// ─────────────────────────────────────────────────────────────────────────────
+   258→   258→// STATIC CELL RENDERING  (memoised once)
+   259→   259→// ─────────────────────────────────────────────────────────────────────────────
+   260→   260→
+   261→   261→function buildCells(): React.ReactNode[] {
+   262→   262→  const cells: React.ReactNode[] = [];
+   263→   263→
+   264→   264→  for (let r = 0; r < 15; r++) {
+   265→   265→    for (let c = 0; c < 15; c++) {
+   266→   266→      const info = classifyCell(r, c);
+   267→   267→      const k = `${r},${c}`;
+   268→   268→      let bg: string = '#ffffff';
+   269→   269→      let extra: React.CSSProperties = {};
+   270→   270→      let content: React.ReactNode = null;
+   271→   271→
+   272→   272→      switch (info.kind) {
+   273→   273→        /* ─── HOME BASE ──────────────────────────────────────────────── */
+   274→   274→        case 'homeBase': {
+   275→   275→          const hex = PLAYER_COLOR_HEX[info.color];
+   276→   276→          const dark = PLAYER_COLOR_DARK[info.color];
+   277→   277→          const light = PLAYER_COLOR_LIGHT[info.color];
+   278→   278→
+   279→   279→          if (info.zone === 'border') {
+   280→   280→            // Coloured outer ring → creates the "border" around the white interior
+   281→   281→            bg = `linear-gradient(145deg, ${hex}, ${dark})`;
+   282→   282→          } else if (info.zone === 'circle') {
+   283→   283→            // Light tint behind the white sitting circle
+   284→   284→            bg = light;
+   285→   285→            content = (
+   286→   286→              <div
+   287→   287→                className="w-[80%] h-[80%] rounded-full shrink-0"
+   288→   288→                style={{
+   289→   289→                  background:
+   290→   290→                    'radial-gradient(circle at 38% 32%, #ffffff, #f3f4f6)',
+   291→   291→                  boxShadow:
+   292→   292→                    '0 2px 6px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 3px rgba(0,0,0,0.06)',
+   293→   293→                  border: `2px solid ${hex}50`,
+   294→   294→                }}
+   295→   295→              />
+   296→   296→            );
+   297→   297→          } else {
+   298→   298→            // Inner white area (not a circle cell)
+   299→   299→            bg = '#ffffff';
+   300→   300→          }
+   301→   301→          break;
+   302→   302→        }
+   303→   303→
+   304→   304→        /* ─── PATH ───────────────────────────────────────────────────── */
+   305→   305→        case 'path':
+   306→   306→          bg = '#ffffff';
+   307→   307→          extra.boxShadow = 'inset 0 1px 3px rgba(0,0,0,0.05)';
+   308→   308→          break;
+   309→   309→
+   310→   310→        /* ─── START CELL ─────────────────────────────────────────────── */
+   311→   311→        case 'start': {
+   312→   312→          const hex = PLAYER_COLOR_HEX[info.color];
+   313→   313→          const dark = PLAYER_COLOR_DARK[info.color];
+   314→   314→          bg = `linear-gradient(135deg, ${hex}, ${dark})`;
+   315→   315→          extra.boxShadow = 'inset 0 1px 4px rgba(0,0,0,0.2)';
+   316→   316→          content = <StartArrow rotation={ARROW_DIRECTION[info.color]} />;
+   317→   317→          break;
+   318→   318→        }
+   319→   319→
+   320→   320→        /* ─── STAR SAFE ZONE ─────────────────────────────────────────── */
+   321→   321→        case 'star': {
+   322→   322→          const hex = PLAYER_COLOR_HEX[info.color];
+   323→   323→          const light = PLAYER_COLOR_LIGHT[info.color];
+   324→   324→          bg = `linear-gradient(135deg, ${light}, #ffffff)`;
+   325→   325→          extra.boxShadow = 'inset 0 1px 3px rgba(0,0,0,0.05)';
+   326→   326→          content = <StarIcon color={hex} />;
+   327→   327→          break;
+   328→   328→        }
+   329→   329→
+   330→   330→        /* ─── HOME COLUMN ────────────────────────────────────────────── */
+   331→   331→        case 'homeColumn': {
+   332→   332→          const hex = PLAYER_COLOR_HEX[info.color];
+   333→   333→          const light = PLAYER_COLOR_LIGHT[info.color];
+   334→   334→          // Gradient: more saturated far from centre, lighter near centre
+   335→   335→          const t = info.index / (info.total - 1); // 0 = entry, 1 = near centre
+   336→   336→          const satAlpha = Math.round(40 - t * 25).toString(16).padStart(2, '0');
+   337→   337→          bg = `linear-gradient(135deg, ${hex}${satAlpha}, ${light})`;
+   338→   338→          extra.borderLeft = `1px solid ${hex}25`;
+   339→   339→          extra.borderRight = `1px solid ${hex}25`;
+   340→   340→          extra.boxShadow = 'inset 0 1px 3px rgba(0,0,0,0.04)';
+   341→   341→          break;
+   342→   342→        }
+   343→   343→
+   344→   344→        /* ─── HOME COLUMN ENTRY ──────────────────────────────────────── */
+   345→   345→        case 'entry': {
+   346→   346→          const hex = PLAYER_COLOR_HEX[info.color];
+   347→   347→          const dark = PLAYER_COLOR_DARK[info.color];
+   348→   348→          bg = `linear-gradient(135deg, ${hex}, ${dark})`;
+   349→   349→          extra.boxShadow = 'inset 0 1px 4px rgba(0,0,0,0.2)';
+   350→   350→          // Small triangle pointing toward home column direction
+   351→   351→          const rot = ARROW_DIRECTION[info.color];
+   352→   352→          content = (
+   353→   353→            <svg
+   354→   354→              viewBox="0 0 24 24"
+   355→   355→              className="w-[55%] h-[55%]"
+   356→   356→              style={{ transform: `rotate(${rot}deg)`, opacity: 0.7 }}
+   357→   357→            >
+   358→   358→              <path
+   359→   359→                d="M6 9l6-5 6 5"
+   360→   360→                fill="none"
+   361→   361→                stroke="white"
+   362→   362→                strokeWidth="2.2"
+   363→   363→                strokeLinecap="round"
+   364→   364→                strokeLinejoin="round"
+   365→   365→              />
+   366→   366→            </svg>
+   367→   367→          );
+   368→   368→          break;
+   369→   369→        }
+   370→   370→
+   371→   371→        /* ─── CENTER / HOME ──────────────────────────────────────────── */
+   372→   372→        case 'center':
+   373→   373→          bg = '#ffffff';
+   374→   374→          content = (
+   375→   375→            <div
+   376→   376→              className="w-[94%] h-[94%] rounded-full shrink-0 relative flex items-center justify-center"
+   377→   377→              style={{
+   378→   378→                background: `conic-gradient(
+   379→   379→                  #DC2626 0deg 90deg,
+   380→   380→                  #16A34A 90deg 180deg,
+   381→   381→                  #CA8A04 180deg 270deg,
+   382→   382→                  #2563EB 270deg 360deg
+   383→   383→                )`,
+   384→   384→                boxShadow:
+   385→   385→                  '0 0 20px rgba(0,0,0,0.3), 0 0 40px rgba(0,0,0,0.1)',
+   386→   386→              }}
+   387→   387→            >
+   388→   388→              {/* Inner ring */}
+   389→   389→              <div
+   390→   390→                className="absolute rounded-full flex items-center justify-center"
+   391→   391→                style={{
+   392→   392→                  width: '58%',
+   393→   393→                  height: '58%',
+   394→   394→                  background: `conic-gradient(
+   395→   395→                    #EF4444 0deg 90deg,
+   396→   396→                    #22C55E 90deg 180deg,
+   397→   397→                    #EAB308 180deg 270deg,
+   398→   398→                    #3B82F6 270deg 360deg
+   399→   399→                  )`,
+   400→   400→                  boxShadow: 'inset 0 0 8px rgba(0,0,0,0.15)',
+   401→   401→                }}
+   402→   402→              >
+   403→   403→                {/* White centre disc */}
+   404→   404→                <div
+   405→   405→                  className="w-[52%] h-[52%] rounded-full flex items-center justify-center"
+   406→   406→                  style={{
+   407→   407→                    background: 'radial-gradient(circle at 40% 35%, #ffffff, #f1f5f9)',
+   408→   408→                    boxShadow: 'inset 0 1px 4px rgba(0,0,0,0.1)',
+   409→   409→                  }}
+   410→   410→                >
+   411→   411→                  <TrophyIcon />
+   412→   412→                </div>
+   413→   413→              </div>
+   414→   414→            </div>
+   415→   415→          );
+   416→   416→          break;
+   417→   417→
+   418→   418→        /* ─── CROSS INNER ────────────────────────────────────────────── */
+   419→   419→        case 'crossInner':
+   420→   420→          bg = '#ffffff';
+   421→   421→          extra.boxShadow = 'inset 0 1px 3px rgba(0,0,0,0.05)';
+   422→   422→          break;
+   423→   423→      }
+   424→   424→
+   425→   425→      cells.push(
+   426→   426→        <div
+   427→   427→          key={k}
+   428→   428→          className="flex items-center justify-center overflow-hidden relative"
+   429→   429→          style={{ background: bg, ...extra }}
+   430→   430→        >
+   431→   431→          {content}
+   432→   432→        </div>,
+   433→   433→      );
+   434→   434→    }
+   435→   435→  }
+   436→   436→
+   437→   437→  return cells;
+   438→   438→}
+   439→   439→
+   440→   440→// ─────────────────────────────────────────────────────────────────────────────
+   441→   441→// PIECE RENDER DATA
+   442→   442→// ─────────────────────────────────────────────────────────────────────────────
+   443→   443→
+   444→   444→interface PieceRenderData {
+   445→   445→  id: string;
+   446→   446→  color: PlayerColor;
+   447→   447→  pieceIndex: number;
+   448→   448→  row: number;
+   449→   449→  col: number;
+   450→   450→  isValid: boolean;
+   451→   451→  stackIdx: number;
+   452→   452→  stackTotal: number;
+   453→   453→}
+   454→   454→
+   455→   455→function computePieces(
+   456→   456→  gameState: SerializedGameState | null,
+   457→   457→  validMoves: number[],
+   458→   458→  myColor: PlayerColor | null,
+   459→   459→): PieceRenderData[] {
+   460→   460→  if (!gameState) return [];
+   461→   461→
+   462→   462→  const groups = new Map<string, PieceRenderData[]>();
+   463→   463→
+   464→   464→  for (const player of gameState.players) {
+   465→   465→    for (const piece of player.pieces) {
+   466→   466→      let row: number;
+   467→   467→      let col: number;
+   468→   468→
+   469→   469→      if (piece.state === 'home') {
+   470→   470→        [row, col] = HOME_CIRCLE_CELLS[piece.color][piece.index];
+   471→   471→      } else if (piece.state === 'finished') {
+   472→   472→        [row, col] = [7, 7];
+   473→   473→      } else {
+   474→   474→        [row, col] = getPiecePosition(piece.color, piece.steps);
+   475→   475→      }
+   476→   476→
+   477→   477→      const posKey = `${row},${col}`;
+   478→   478→      if (!groups.has(posKey)) groups.set(posKey, []);
+   479→   479→
+   480→   480→      groups.get(posKey)!.push({
+   481→   481→        id: `${piece.color}-${piece.index}`,
+   482→   482→        color: piece.color,
+   483→   483→        pieceIndex: piece.index,
+   484→   484→        row,
+   485→   485→        col,
+   486→   486→        isValid: piece.color === myColor && validMoves.includes(piece.index),
+   487→   487→        stackIdx: 0,
+   488→   488→        stackTotal: 0,
+   489→   489→      });
+   490→   490→    }
+   491→   491→  }
+   492→   492→
+   493→   493→  const result: PieceRenderData[] = [];
+   494→   494→  for (const group of groups.values()) {
+   495→   495→    const total = group.length;
+   496→   496→    for (let i = 0; i < total; i++) {
+   497→   497→      group[i].stackIdx = i;
+   498→   498→      group[i].stackTotal = total;
+   499→   499→    }
+   500→   500→    result.push(...group);
+   501→   501→  }
+   502→   502→
+   503→   503→  return result;
+   504→   504→}
+   505→   505→
+   506→   506→// ─────────────────────────────────────────────────────────────────────────────
+   507→   507→// LudoBoard COMPONENT
+   508→   508→// ─────────────────────────────────────────────────────────────────────────────
+   509→   509→
+   510→   510→export default function LudoBoard({
+   511→   511→  gameState,
+   512→   512→  validMoves,
+   513→   513→  onPieceClick,
+   514→   514→  myColor,
+   515→   515→}: LudoBoardProps) {
+   516→   516→  // Static cells – built once and never change
+   517→   517→  const cells = useMemo(() => buildCells(), []);
+   518→   518→
+   519→   519→  // Piece positions – recomputed when game state / valid moves change
+   520→   520→  const pieces = useMemo(
+   521→   521→    () => computePieces(gameState, validMoves, myColor),
+   522→   522→    [gameState, validMoves, myColor],
+   523→   523→  );
+   524→   524→
+   525→   525→  return (
+   526→   526→    <div className="w-full max-w-[min(600px,90vw)] mx-auto select-none">
+   527→   527→      {/* ── Premium outer frame (wood-tone gradient) ─────────────────── */}
+   528→   528→      <div
+   529→   529→        className="rounded-2xl p-[7px]"
+   530→   530→        style={{
+   531→   531→          background:
+   532→   532→            'linear-gradient(145deg, #a0845c 0%, #6b5640 40%, #8b7355 70%, #a0845c 100%)',
+   533→   533→          boxShadow:
+   534→   534→            '0 16px 48px rgba(0,0,0,0.28), 0 4px 14px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.18)',
+   535→   535→        }}
+   536→   536→      >
+   537→   537→        <div
+   538→   538→          className="aspect-square relative overflow-hidden rounded-[10px]"
+   539→   539→          style={{
+   540→   540→            boxShadow: 'inset 0 0 0 1.5px rgba(0,0,0,0.12)',
+   541→   541→          }}
+   542→   542→        >
+   543→   543→          {/* ── Cell grid layer (static board) ────────────────────────── */}
+   544→   544→          <div
+   545→   545→            className="absolute inset-0 pointer-events-none"
+   546→   546→            style={{
+   547→   547→              display: 'grid',
+   548→   548→              gridTemplateColumns: 'repeat(15, 1fr)',
+   549→   549→              gridTemplateRows: 'repeat(15, 1fr)',
+   550→   550→              gap: '0.5px',
+   551→   551→              background: '#c9bda8',
+   552→   552→              zIndex: 1,
+   553→   553→            }}
+   554→   554→          >
+   555→   555→            {cells}
+   556→   556→          </div>
+   557→   557→
+   558→   558→          {/* ── Home-base arrow overlays ──────────────────────────────── */}
+   559→   559→          <div
+   560→   560→            className="absolute inset-0 pointer-events-none"
+   561→   561→            style={{ zIndex: 1 }}
+   562→   562→          >
+   563→   563→            {(['red', 'green', 'yellow', 'blue'] as PlayerColor[]).map(
+   564→   564→              (color) => {
+   565→   565→                const pos = HOME_ARROW_POS[color];
+   566→   566→                return (
+   567→   567→                  <div
+   568→   568→                    key={color}
+   569→   569→                    className="absolute flex items-center justify-center"
+   570→   570→                    style={{
+   571→   571→                      top: `${pos.top}%`,
+   572→   572→                      left: `${pos.left}%`,
+   573→   573→                      width: '13.33%',
+   574→   574→                      height: '13.33%',
+   575→   575→                    }}
+   576→   576→                  >
+   577→   577→                    <HomeBaseArrow color={color} />
+   578→   578→                  </div>
+   579→   579→                );
+   580→   580→              },
+   581→   581→            )}
+   582→   582→          </div>
+   583→   583→
+   584→   584→          {/* ── Piece overlay layer (animated) ────────────────────────── */}
+   585→   585→          <div
+   586→   586→            className="absolute inset-0 pointer-events-none"
+   587→   587→            style={{
+   588→   588→              display: 'grid',
+   589→   589→              gridTemplateColumns: 'repeat(15, 1fr)',
+   590→   590→              gridTemplateRows: 'repeat(15, 1fr)',
+   591→   591→              gap: '0.5px',
+   592→   592→              zIndex: 2,
+   593→   593→            }}
+   594→   594→          >
+   595→   595→            {pieces.map((p) => {
+   596→   596→              const stacked = p.stackTotal > 1;
+   597→   597→              const offset = stacked
+   598→   598→                ? STACK_OFFSETS[p.stackIdx] ?? { x: 0, y: 0 }
+   599→   599→                : { x: 0, y: 0 };
+   600→   600→              const size = stacked ? '58%' : '76%';
+   601→   601→              const hex = PLAYER_COLOR_HEX[p.color];
+   602→   602→              const dark = PLAYER_COLOR_DARK[p.color];
+   603→   603→
+   604→   604→              // Glow keyframes for valid-move pulsing
+   605→   605→              const glowKeyframes = p.isValid
+   606→   606→                ? [
+   607→   607→                    `0 3px 8px rgba(0,0,0,0.30), 0 0 6px ${hex}80, inset 0 2px 4px rgba(255,255,255,0.40), inset 0 -2px 4px rgba(0,0,0,0.12)`,
+   608→   608→                    `0 3px 8px rgba(0,0,0,0.30), 0 0 18px ${hex}bb, inset 0 2px 4px rgba(255,255,255,0.40), inset 0 -2px 4px rgba(0,0,0,0.12)`,
+   609→   609→                    `0 3px 8px rgba(0,0,0,0.30), 0 0 28px ${hex}, inset 0 2px 4px rgba(255,255,255,0.40), inset 0 -2px 4px rgba(0,0,0,0.12)`,
+   610→   610→                    `0 3px 8px rgba(0,0,0,0.30), 0 0 18px ${hex}bb, inset 0 2px 4px rgba(255,255,255,0.40), inset 0 -2px 4px rgba(0,0,0,0.12)`,
+   611→   611→                    `0 3px 8px rgba(0,0,0,0.30), 0 0 6px ${hex}80, inset 0 2px 4px rgba(255,255,255,0.40), inset 0 -2px 4px rgba(0,0,0,0.12)`,
+   612→   612→                  ]
+   613→   613→                : undefined;
+   614→   614→
+   615→   615→              const scaleKeyframes = p.isValid
+   616→   616→                ? [1, 1.07, 1.12, 1.07, 1]
+   617→   617→                : undefined;
+   618→   618→
+   619→   619→              return (
+   620→   620→                <motion.div
+   621→   621→                  key={p.id}
+   622→   622→                  layout
+   623→   623→                  style={{
+   624→   624→                    gridRow: p.row + 1,
+   625→   625→                    gridColumn: p.col + 1,
+   626→   626→                    pointerEvents: p.isValid ? 'auto' : 'none',
+   627→   627→                  }}
+   628→   628→                  className="flex items-center justify-center relative"
+   629→   629→                  transition={{
+   630→   630→                    type: 'spring',
+   631→   631→                    stiffness: 360,
+   632→   632→                    damping: 26,
+   633→   633→                    mass: 0.8,
+   634→   634→                  }}
+   635→   635→                >
+   636→   636→                  {/* Drop shadow (offset down for 3-D feel) */}
+   637→   637→                  <div
+   638→   638→                    className="absolute rounded-full"
+   639→   639→                    style={{
+   640→   640→                      width: size,
+   641→   641→                      height: size,
+   642→   642→                      transform: `translate(${offset.x}px, ${offset.y + 2}px)`,
+   643→   643→                      background:
+   644→   644→                        'radial-gradient(ellipse, rgba(0,0,0,0.18) 0%, transparent 70%)',
+   645→   645→                    }}
+   646→   646→                  />
+   647→   647→
+   648→   648→                  {/* Piece body */}
+   649→   649→                  <motion.div
+   650→   650→                    className="relative rounded-full shrink-0"
+   651→   651→                    style={{
+   652→   652→                      width: size,
+   653→   653→                      height: size,
+   654→   654→                      transform: `translate(${offset.x}px, ${offset.y}px)`,
+   655→   655→                      cursor: p.isValid ? 'pointer' : 'default',
+   656→   656→                      // 3-D glossy gradient: highlight top-left → base colour → shadow bottom-right
+   657→   657→                      background: `radial-gradient(circle at 36% 28%, ${hex}ff 0%, ${hex}dd 45%, ${dark} 100%)`,
+   658→   658→                      boxShadow: `0 3px 8px rgba(0,0,0,0.30), inset 0 2px 4px rgba(255,255,255,0.40), inset 0 -2px 4px rgba(0,0,0,0.12)`,
+   659→   659→                      border: '1.5px solid rgba(255,255,255,0.30)',
+   660→   660→                    }}
+   661→   661→                    animate={
+   662→   662→                      glowKeyframes
+   663→   663→                        ? {
+   664→   664→                            boxShadow: glowKeyframes,
+   665→   665→                            scale: scaleKeyframes,
+   666→   666→                          }
+   667→   667→                        : undefined
+   668→   668→                    }
+   669→   669→                    transition={
+   670→   670→                      p.isValid
+   671→   671→                        ? {
+   672→   672→                            repeat: Infinity,
+   673→   673→                            duration: 1.4,
+   674→   674→                            ease: 'easeInOut' as const,
+   675→   675→                          }
+   676→   676→                        : undefined
+   677→   677→                    }
+   678→   678→                    onClick={() => {
+   679→   679→                      if (p.isValid) onPieceClick(p.color, p.pieceIndex);
+   680→   680→                    }}
+   681→   681→                    whileTap={p.isValid ? { scale: 0.88 } : undefined}
+   682→   682→                  >
+   683→   683→                    {/* Specular highlight arc */}
+   684→   684→                    <div
+   685→   685→                      className="absolute rounded-full pointer-events-none"
+   686→   686→                      style={{
+   687→   687→                        top: '8%',
+   688→   688→                        left: '12%',
+   689→   689→                        width: '55%',
+   690→   690→                        height: '38%',
+   691→   691→                        background:
+   692→   692→                          'radial-gradient(ellipse at 50% 60%, rgba(255,255,255,0.55) 0%, transparent 100%)',
+   693→   693→                        borderRadius: '50%',
+   694→   694→                      }}
+   695→   695→                    />
+   696→   696→
+   697→   697→                    {/* Piece number label */}
+   698→   698→                    <span
+   699→   699→                      className="absolute inset-0 flex items-center justify-center font-extrabold z-10 pointer-events-none"
+   700→   700→                      style={{
+   701→   701→                        fontSize: 'clamp(7px, 1.15vw, 14px)',
+   702→   702→                        color: '#ffffff',
+   703→   703→                        textShadow: '0 1px 3px rgba(0,0,0,0.45)',
+   704→   704→                        lineHeight: 1,
+   705→   705→                      }}
+   706→   706→                    >
+   707→   707→                      {p.pieceIndex + 1}
+   708→   708→                    </span>
+   709→   709→                  </motion.div>
+   710→   710→                </motion.div>
+   711→   711→              );
+   712→   712→            })}
+   713→   713→          </div>
+   714→   714→        </div>
+   715→   715→      </div>
+   716→   716→    </div>
+   717→   717→  );
+   718→   718→}

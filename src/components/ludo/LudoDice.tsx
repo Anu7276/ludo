@@ -153,7 +153,7 @@ export default function LudoDice({
         aria-label="Roll dice"
       >
         <motion.div
-          className="relative w-18 h-18 sm:w-22 sm:h-22 rounded-2xl overflow-hidden"
+          className="relative w-14 h-14 sm:w-[88px] sm:h-[88px] lg:w-22 lg:h-22 rounded-2xl overflow-hidden"
           style={{
             transformStyle: 'preserve-3d',
             /* cream-white background with top-left lighting gradient */

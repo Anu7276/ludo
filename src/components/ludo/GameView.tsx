@@ -201,7 +201,7 @@ export default function GameView() {
   const myColorHex = playerColor ? PLAYER_COLOR_HEX[playerColor] : '#6B7280';
 
   return (
-    <div className="min-h-screen flex flex-col bg-gradient-to-br from-gray-50 via-white to-gray-100">
+    <div className="h-[100dvh] flex flex-col bg-gradient-to-br from-gray-50 via-white to-gray-100 overflow-hidden">
       {/* ==================== GAME HEADER ==================== */}
       <header className="bg-white/90 backdrop-blur-md border-b border-gray-200/80 px-4 py-2.5 flex items-center justify-between sticky top-0 z-20">
         <div className="flex items-center gap-3">
@@ -432,10 +432,10 @@ export default function GameView() {
       </div>
 
       {/* ==================== MAIN CONTENT ==================== */}
-      <main className="flex-1 flex items-start justify-center p-3 sm:p-4 lg:p-6 overflow-auto">
-        <div className="max-w-5xl w-full flex flex-col lg:flex-row items-center lg:items-start justify-center gap-4 lg:gap-6">
+      <main className="flex-1 flex items-center justify-center p-2 sm:p-4 lg:p-6 overflow-hidden">
+        <div className="max-w-5xl w-full flex flex-col lg:flex-row items-center lg:items-start justify-center gap-2 sm:gap-4 lg:gap-6">
           {/* Board + Dice Column */}
-          <div className="flex flex-col items-center gap-4">
+          <div className="flex flex-col items-center gap-2 sm:gap-3 flex-shrink-0">
             <LudoBoard
               gameState={gameState}
               validMoves={validMoves}
@@ -443,16 +443,14 @@ export default function GameView() {
               myColor={playerColor}
             />
 
-            {/* Dice + Controls below board */}
-            <div className="flex items-center gap-6">
-              <LudoDice
-                value={diceValue}
-                rolling={false}
-                onRoll={handleRoll}
-                disabled={!isMyTurn || diceRolled || !!winner}
-                currentColor={currentPlayerColor}
-              />
-            </div>
+            {/* Dice below board */}
+            <LudoDice
+              value={diceValue}
+              rolling={false}
+              onRoll={handleRoll}
+              disabled={!isMyTurn || diceRolled || !!winner}
+              currentColor={currentPlayerColor}
+            />
 
             {/* Mobile: Last Action */}
             <div className="sm:hidden w-full max-w-xs">
@@ -480,7 +478,7 @@ export default function GameView() {
       </main>
 
       {/* ==================== MOBILE BOTTOM BAR ==================== */}
-      <div className="lg:hidden bg-white/90 backdrop-blur-md border-t border-gray-200/80 px-4 py-2.5 flex items-center justify-between">
+      <div className="lg:hidden bg-white/90 backdrop-blur-md border-t border-gray-200/80 px-3 py-2 flex items-center justify-between safe-area-bottom">
         <div className="flex items-center gap-2 min-w-0">
           <motion.div
             key={currentPlayerColor}
@@ -495,12 +493,28 @@ export default function GameView() {
             ) : isMyTurn ? (
               <span className="text-green-600">
                 <Zap className="w-3 h-3 inline -mt-0.5 mr-0.5" />
-                Your Turn{diceRolled ? ' — Tap a piece!' : ' — Roll!'}
+                Your Turn{diceRolled ? ' — Tap!' : ' — Roll!'}
               </span>
             ) : (
               <span className="text-gray-400">{currentPlayerName}&apos;s turn</span>
             )}
           </span>
+        </div>
+
+        {/* Mini player color dots */}
+        <div className="flex items-center gap-1">
+          {gameState?.players.map((p) => (
+            <motion.div
+              key={p.color}
+              animate={p.color === currentPlayerColor && !winner ? { scale: [1, 1.15, 1] } : { scale: 1 }}
+              transition={{ duration: 1.5, repeat: p.color === currentPlayerColor && !winner ? Infinity : 0 }}
+              className="w-3 h-3 rounded-full border border-white shadow-sm"
+              style={{
+                backgroundColor: PLAYER_COLOR_HEX[p.color],
+                opacity: p.color === currentPlayerColor ? 1 : 0.5,
+              }}
+            />
+          ))}
         </div>
 
         {/* Mobile Players Drawer Trigger */}
@@ -509,11 +523,10 @@ export default function GameView() {
             <Button
               variant="outline"
               size="sm"
-              className="h-8 text-xs font-semibold gap-1.5 border-gray-200"
+              className="h-7 px-2.5 text-[11px] font-semibold gap-1 border-gray-200"
             >
-              <Users className="w-3.5 h-3.5" />
-              Players
-              <ChevronUp className="w-3 h-3 text-gray-400" />
+              <Users className="w-3 h-3" />
+              <ChevronUp className="w-2.5 h-2.5 text-gray-400" />
             </Button>
           </DrawerTrigger>
           <DrawerContent className="max-h-[70vh]">
