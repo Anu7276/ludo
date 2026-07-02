@@ -9,6 +9,7 @@ interface LudoDiceProps {
   onRoll: () => void;
   disabled: boolean;
   currentColor: string | null;
+  waitingLabel?: string;
 }
 
 /* ── colour map ─────────────────────────────────────────────── */
@@ -89,6 +90,7 @@ export default function LudoDice({
   onRoll,
   disabled,
   currentColor,
+  waitingLabel = 'Waiting...',
 }: LudoDiceProps) {
   const [localRolling, setLocalRolling] = useState(false);
   const [settling, setSettling] = useState(false);
@@ -101,7 +103,7 @@ export default function LudoDice({
 
   /* ── rolling face randomiser ──────────────────────────────── */
   useEffect(() => {
-    if (rolling && !localRolling) {
+    if (rolling) {
       setLocalRolling(true);
       setSettling(false);
       let tick = 0;
@@ -119,7 +121,7 @@ export default function LudoDice({
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-    }, [rolling]);
+  }, [rolling, value]);
 
   /* ── clear settle after bounce ────────────────────────────── */
   useEffect(() => {
@@ -153,7 +155,7 @@ export default function LudoDice({
         aria-label="Roll dice"
       >
         <motion.div
-          className="relative w-14 h-14 sm:w-[88px] sm:h-[88px] lg:w-22 lg:h-22 rounded-2xl overflow-hidden"
+          className="relative w-[72px] h-[72px] sm:w-20 sm:h-20 lg:w-24 lg:h-24 rounded-2xl overflow-hidden"
           style={{
             transformStyle: 'preserve-3d',
             /* cream-white background with top-left lighting gradient */
@@ -281,7 +283,7 @@ export default function LudoDice({
             Rolling...
           </>
         ) : disabled ? (
-          'Waiting...'
+          waitingLabel
         ) : (
           'Roll Dice'
         )}

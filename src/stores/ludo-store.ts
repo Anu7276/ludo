@@ -68,6 +68,7 @@ interface LudoStore {
   gameState: SerializedGameState | null;
   diceValue: number | null;
   diceRolled: boolean;
+  isDiceAnimating: boolean;
   isMyTurn: boolean;
   validMoves: number[];
   winner: PlayerColor | null;
@@ -95,6 +96,7 @@ interface LudoStore {
   startGame: () => void;
   rollDice: () => Promise<number | null>;
   movePiece: (pieceIndex: number) => Promise<boolean>;
+  turnTimeout: () => void;
   leaveRoom: () => void;
   restartGame: () => void;
   
@@ -104,6 +106,64 @@ interface LudoStore {
   _setError: (error: string | null) => void;
   _setDiceValue: (value: number | null) => void;
   _setValidMoves: (moves: number[]) => void;
+}
+
+const SESSION_KEY = 'ludo-session';
+
+function saveSession(roomId: string, playerId: string) {
+  if (typeof window !== 'undefined') {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify({ roomId, playerId }));
+  }
+}
+
+function loadSession(): { roomId: string; playerId: string } | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function clearSession() {
+  if (typeof window !== 'undefined') sessionStorage.removeItem(SESSION_KEY);
+}
+
+function tryReconnectRoom(socket: Socket) {
+  const { roomId, playerId } = useLudoStore.getState();
+  const session = roomId && playerId ? { roomId, playerId } : loadSession();
+  if (!session?.roomId || !session?.playerId) return;
+
+  socket.emit('room:reconnect', session, (response: { success: boolean; gameState?: SerializedGameState; error?: string }) => {
+    if (!response.success) return;
+    const updates: Partial<LudoStore> = {
+      roomId: session.roomId,
+      playerId: session.playerId,
+    };
+    if (response.gameState) {
+      useLudoStore.getState()._setGameState(response.gameState);
+      if (response.gameState.phase === 'playing') {
+        updates.showLobby = false;
+        updates.showGame = true;
+        updates.gamePhase = 'playing';
+      } else if (response.gameState.phase === 'waiting') {
+        updates.showLobby = true;
+        updates.showGame = false;
+        updates.gamePhase = 'waiting';
+      }
+    }
+    useLudoStore.setState(updates);
+    saveSession(session.roomId, session.playerId);
+
+    const state = response.gameState;
+    const me = state?.players.find(p => p.id === session.playerId);
+    if (me && state?.diceRolled && state.players[state.currentPlayerIndex]?.id === session.playerId) {
+      socket.emit('game:getValidMoves', {}, (res: { success: boolean; moves: number[] }) => {
+        if (res.success) useLudoStore.setState({ validMoves: res.moves });
+      });
+    }
+  });
 }
 
 export const useLudoStore = create<LudoStore>((set, get) => ({
@@ -121,6 +181,7 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
   gameState: null,
   diceValue: null,
   diceRolled: false,
+  isDiceAnimating: false,
   isMyTurn: false,
   validMoves: [],
   winner: null,
@@ -174,7 +235,8 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
 
     socket.on('connect', () => {
       console.log('[Ludo] Connected to server, id=', socket.id);
-      set({ connected: true, playerId: socket.id || '', connectionStatus: 'connected' });
+      set({ connected: true, connectionStatus: 'connected' });
+      tryReconnectRoom(socket);
     });
 
     socket.on('disconnect', (reason) => {
@@ -195,6 +257,7 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
     socket.io.on('reconnect', () => {
       console.log('[Ludo] Reconnected');
       set({ connectionStatus: 'connected', connected: true });
+      tryReconnectRoom(socket);
     });
 
     socket.io.on('reconnect_failed', () => {
@@ -207,15 +270,12 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
     });
 
     socket.on('game:started', (data: { gameState: SerializedGameState }) => {
-      set({ 
+      get()._setGameState(data.gameState);
+      set({
         gamePhase: 'playing',
-        gameState: data.gameState,
         showLobby: false,
         showGame: true,
       });
-      const { playerId } = get();
-      const currentPlayer = data.gameState.players[data.gameState.currentPlayerIndex];
-      set({ isMyTurn: currentPlayer?.id === playerId });
     });
 
     socket.on('game:stateUpdate', (state: SerializedGameState) => {
@@ -223,15 +283,21 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
     });
 
     socket.on('dice:rolled', (data: { playerId: string; playerColor: PlayerColor; value: number }) => {
-      get()._setDiceValue(data.value);
+      set({ diceValue: data.value, diceRolled: true, isDiceAnimating: true });
+      setTimeout(() => {
+        if (get().diceValue === data.value) {
+          set({ isDiceAnimating: false });
+        }
+      }, 1100);
       const { playerId } = get();
       if (data.playerId === playerId) {
-        // Get valid moves
         socket.emit('game:getValidMoves', {}, (response: { success: boolean; moves: number[] }) => {
           if (response.success) {
             set({ validMoves: response.moves });
           }
         });
+      } else {
+        set({ validMoves: [] });
       }
     });
 
@@ -242,15 +308,20 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
     socket.on('piece:moved', (data: { 
       playerId: string; playerColor: PlayerColor;
       pieceIndex: number; fromSteps: number; toSteps: number;
-      captured: any; enteredBoard?: boolean; reachedHome?: boolean;
+      captured?: { color: PlayerColor; pieceIndex: number } | null;
+      captures?: { color: PlayerColor; pieceIndex: number }[];
+      enteredBoard?: boolean; reachedHome?: boolean;
     }) => {
+      const captureCount = data.captures?.length ?? (data.captured ? 1 : 0);
       const action = data.reachedHome 
         ? `${data.playerColor} piece reached home! 🎉` 
-        : data.captured 
-          ? `${data.playerColor} captured ${data.captured.color}'s piece! ⚔️` 
-          : data.enteredBoard 
-            ? `${data.playerColor} piece entered the board` 
-            : `${data.playerColor} moved piece ${data.pieceIndex + 1}`;
+        : captureCount > 1
+          ? `${data.playerColor} captured ${captureCount} pieces! ⚔️`
+          : captureCount === 1
+            ? `${data.playerColor} captured ${(data.captures?.[0] ?? data.captured)!.color}'s piece! ⚔️`
+            : data.enteredBoard 
+              ? `${data.playerColor} piece entered the board` 
+              : `${data.playerColor} moved piece ${data.pieceIndex + 1}`;
       set({ lastAction: action, validMoves: [] });
     });
 
@@ -285,12 +356,14 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
             roomId: response.roomId,
             roomCode: response.code,
             playerColor: response.color,
+            playerId: response.playerId,
             playerName,
-            hostId: socket.id,
+            hostId: response.playerId,
             showLobby: true,
             showGame: false,
             error: null,
           });
+          saveSession(response.roomId, response.playerId);
           resolve({ roomId: response.roomId, code: response.code, color: response.color });
         } else {
           set({ error: response.error });
@@ -311,11 +384,13 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
             roomId: response.roomId,
             roomCode: response.code,
             playerColor: response.color,
+            playerId: response.playerId,
             playerName,
             showLobby: true,
             showGame: false,
             error: null,
           });
+          saveSession(response.roomId, response.playerId);
           resolve({ roomId: response.roomId, code: response.code, color: response.color });
         } else {
           set({ error: response.error });
@@ -390,11 +465,22 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
 
   toggleSound: () => set(state => ({ soundMuted: !state.soundMuted })),
 
+  turnTimeout: () => {
+    const { socket } = get();
+    if (!socket) return;
+    socket.emit('turn:timeout', {}, (response: { success: boolean; error?: string }) => {
+      if (!response.success && response.error) {
+        set({ error: response.error });
+      }
+    });
+  },
+
   leaveRoom: () => {
     const { socket, roomId } = get();
     if (socket && roomId) {
       socket.emit('room:leave');
     }
+    clearSession();
     set({
       roomId: null,
       roomCode: null,
@@ -405,6 +491,7 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
       gameState: null,
       diceValue: null,
       diceRolled: false,
+      isDiceAnimating: false,
       isMyTurn: false,
       validMoves: [],
       winner: null,
@@ -429,16 +516,23 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
   },
 
   _setGameState: (state: SerializedGameState) => {
-    const { playerId } = get();
+    const { playerId, socket } = get();
     const currentPlayer = state.players[state.currentPlayerIndex];
+    const myTurn = currentPlayer?.id === playerId && state.phase === 'playing';
     set({
       gameState: state,
       gamePhase: state.phase,
       diceValue: state.diceValue,
       diceRolled: state.diceRolled,
-      isMyTurn: currentPlayer?.id === playerId && state.phase === 'playing',
+      isMyTurn: myTurn,
       winner: state.winner,
+      ...(state.diceRolled ? {} : { isDiceAnimating: false, validMoves: [] }),
     });
+    if (myTurn && state.diceRolled && socket) {
+      socket.emit('game:getValidMoves', {}, (response: { success: boolean; moves: number[] }) => {
+        if (response.success) set({ validMoves: response.moves });
+      });
+    }
   },
 
   _setRoomPlayers: (players: RoomPlayer[], hostId: string) => {
@@ -452,6 +546,6 @@ export const useLudoStore = create<LudoStore>((set, get) => ({
   },
 
   _setError: (error: string | null) => set({ error }),
-  _setDiceValue: (value: number | null) => set({ diceValue: value }),
+  _setDiceValue: (value: number | null) => set({ diceValue: value, diceRolled: value !== null }),
   _setValidMoves: (moves: number[]) => set({ validMoves: moves }),
 }));

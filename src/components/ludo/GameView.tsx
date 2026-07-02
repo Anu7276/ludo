@@ -52,25 +52,24 @@ const DICE_FACES: Record<number, string> = {
 };
 
 export default function GameView() {
-  const {
-    gameState,
-    validMoves,
-    playerColor,
-    diceValue,
-    diceRolled,
-    isMyTurn,
-    currentPlayerIndex,
-    winner,
-    gamePhase,
-    lastAction,
-    rollDice,
-    movePiece,
-    leaveRoom,
-    restartGame,
-    roomCode,
-    soundMuted,
-    toggleSound,
-  } = useLudoStore();
+  const gameState = useLudoStore((s) => s.gameState);
+  const validMoves = useLudoStore((s) => s.validMoves);
+  const playerColor = useLudoStore((s) => s.playerColor);
+  const diceValue = useLudoStore((s) => s.diceValue);
+  const diceRolled = useLudoStore((s) => s.diceRolled);
+  const isDiceAnimating = useLudoStore((s) => s.isDiceAnimating);
+  const isMyTurn = useLudoStore((s) => s.isMyTurn);
+  const winner = useLudoStore((s) => s.winner);
+  const gamePhase = useLudoStore((s) => s.gamePhase);
+  const lastAction = useLudoStore((s) => s.lastAction);
+  const rollDice = useLudoStore((s) => s.rollDice);
+  const movePiece = useLudoStore((s) => s.movePiece);
+  const turnTimeout = useLudoStore((s) => s.turnTimeout);
+  const leaveRoom = useLudoStore((s) => s.leaveRoom);
+  const restartGame = useLudoStore((s) => s.restartGame);
+  const roomCode = useLudoStore((s) => s.roomCode);
+  const soundMuted = useLudoStore((s) => s.soundMuted);
+  const toggleSound = useLudoStore((s) => s.toggleSound);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const soundMutedRef = useRef(soundMuted);
   const confettiFired = useRef(false);
@@ -78,19 +77,25 @@ export default function GameView() {
   const [turnTimer, setTurnTimer] = useState(30);
   const timerInterval = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Turn countdown timer  
-  const isActive = isMyTurn && !diceRolled && !winner && gamePhase === 'playing';
+  // Turn countdown — auto-roll or auto-move when time runs out
+  const isActive = isMyTurn && !winner && gamePhase === 'playing';
   useEffect(() => {
     if (timerInterval.current) clearInterval(timerInterval.current);
     timerInterval.current = null;
-    if (!isActive) return;
+    if (!isActive) {
+      setTurnTimer(30);
+      return;
+    }
+    setTurnTimer(30);
     const startTime = Date.now();
     timerInterval.current = setInterval(() => {
       const elapsed = Math.floor((Date.now() - startTime) / 1000);
-      setTurnTimer(Math.max(0, 30 - elapsed));
-      if (30 - elapsed <= 0 && timerInterval.current) {
+      const remaining = Math.max(0, 30 - elapsed);
+      setTurnTimer(remaining);
+      if (remaining <= 0 && timerInterval.current) {
         clearInterval(timerInterval.current);
         timerInterval.current = null;
+        turnTimeout();
       }
     }, 250);
     return () => {
@@ -99,13 +104,14 @@ export default function GameView() {
         timerInterval.current = null;
       }
     };
-  }, [isActive]);
+  }, [isActive, isMyTurn, diceRolled, gameState?.currentPlayerIndex, turnTimeout]);
 
   // Keep soundMuted ref in sync
   useEffect(() => {
     soundMutedRef.current = soundMuted;
   }, [soundMuted]);
 
+  const currentPlayerIndex = gameState?.currentPlayerIndex ?? 0;
   const currentPlayerColor = gameState?.players[currentPlayerIndex]?.color || null;
   const currentPlayerName = gameState?.players[currentPlayerIndex]?.name || '...';
   const winnerName = winner
@@ -189,15 +195,18 @@ export default function GameView() {
     await rollDice();
   }, [rollDice]);
 
-  // Auto-move: if only one piece can move, auto-move it after a short delay
+  // Auto-move only when exactly one move and it is not leaving home (player may want to pick which piece)
   useEffect(() => {
-    if (isMyTurn && diceRolled && validMoves.length === 1 && gamePhase === 'playing' && !winner) {
-      const timer = setTimeout(() => {
-        movePiece(validMoves[0]);
-      }, 400);
-      return () => clearTimeout(timer);
-    }
-  }, [isMyTurn, diceRolled, validMoves, gamePhase, winner, movePiece]);
+    if (!isMyTurn || !diceRolled || validMoves.length !== 1 || gamePhase !== 'playing' || winner) return;
+    const myPlayer = gameState?.players.find((p) => p.color === playerColor);
+    const piece = myPlayer?.pieces[validMoves[0]];
+    if (piece?.state === 'home') return;
+
+    const timer = setTimeout(() => {
+      movePiece(validMoves[0]);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [isMyTurn, diceRolled, validMoves, gamePhase, winner, movePiece, gameState, playerColor]);
 
   if (!gameState) return null;
 
@@ -289,7 +298,7 @@ export default function GameView() {
                 </div>
                 <div className="rounded-xl bg-amber-50 border border-amber-200 p-3">
                   <p className="text-amber-700 text-xs font-medium">
-                    💡 <strong>Tip:</strong> Rolling three 6&apos;s in a row will forfeit your turn!
+                    💡 <strong>Tip:</strong> Rolling three 6&apos;s in a row will forfeit your turn! After bringing a piece out, move it off the start square before bringing out another.
                   </p>
                 </div>
               </div>
@@ -401,7 +410,7 @@ export default function GameView() {
           </div>
 
           {/* Turn Timer (when it's player's turn and hasn't rolled) */}
-          {isMyTurn && !diceRolled && !winner && (
+          {isMyTurn && !winner && (
             <div className="flex items-center gap-1.5 shrink-0">
               <Clock className="w-3.5 h-3.5 text-gray-400" />
               <span
@@ -435,24 +444,27 @@ export default function GameView() {
       </div>
 
       {/* ==================== MAIN CONTENT ==================== */}
-      <main className="flex-1 flex items-center justify-center overflow-hidden">
-        <div className="w-full h-full flex flex-col lg:flex-row items-center lg:items-center justify-center gap-1 sm:gap-2 lg:gap-5 p-1 sm:p-3 lg:p-4">
+      <main className="flex-1 flex items-stretch justify-center overflow-hidden min-h-0">
+        <div className="w-full h-full flex flex-col lg:flex-row items-center lg:items-center justify-center gap-1 sm:gap-2 lg:gap-5 p-1 sm:p-2 lg:p-4 min-h-0">
           {/* Board Column - takes as much space as possible */}
-          <div className="flex flex-col items-center gap-1.5 sm:gap-2 flex-1 min-h-0 justify-center">
-            <LudoBoard
-              gameState={gameState}
-              validMoves={validMoves}
-              onPieceClick={handlePieceClick}
-              myColor={playerColor}
-            />
+          <div className="flex flex-col items-center gap-1 sm:gap-2 flex-1 min-h-0 w-full max-w-[min(98vw,720px)] justify-center">
+            <div className="flex-1 min-h-0 w-full flex items-center justify-center">
+              <LudoBoard
+                gameState={gameState}
+                validMoves={validMoves}
+                onPieceClick={handlePieceClick}
+                myColor={playerColor}
+              />
+            </div>
 
             {/* Dice below board */}
             <LudoDice
               value={diceValue}
-              rolling={false}
+              rolling={isDiceAnimating}
               onRoll={handleRoll}
               disabled={!isMyTurn || diceRolled || !!winner}
               currentColor={currentPlayerColor}
+              waitingLabel={isMyTurn ? 'Waiting...' : `${currentPlayerName}'s turn`}
             />
 
             {/* Mobile: Last Action */}

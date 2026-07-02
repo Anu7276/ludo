@@ -34,6 +34,8 @@ export interface GameState {
   createdAt: number;
 }
 
+export type CapturedPiece = { color: PlayerColor; pieceIndex: number };
+
 export interface TurnRecord {
   playerId: string;
   playerColor: PlayerColor;
@@ -41,7 +43,8 @@ export interface TurnRecord {
   pieceIndex: number;
   fromSteps: number;
   toSteps: number;
-  captured: { color: PlayerColor; pieceIndex: number } | null;
+  captured: CapturedPiece | null;
+  captures?: CapturedPiece[];
   timestamp: number;
 }
 
@@ -61,7 +64,8 @@ export interface MoveResult {
   pieceIndex: number;
   fromSteps: number;
   toSteps: number;
-  captured?: { color: PlayerColor; pieceIndex: number };
+  captured?: CapturedPiece;
+  captures?: CapturedPiece[];
   enteredBoard?: boolean;
   reachedHome?: boolean;
   extraTurn?: boolean;

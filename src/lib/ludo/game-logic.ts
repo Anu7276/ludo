@@ -1,5 +1,5 @@
 import { 
-  GameState, Player, Piece, PlayerColor, MoveResult, 
+  GameState, Player, Piece, PlayerColor, MoveResult, CapturedPiece,
   PLAYER_COLORS, PieceState 
 } from './types';
 import { 
@@ -128,7 +128,11 @@ export function canMovePiece(state: GameState, playerIndex: number, pieceIndex: 
   
   // If piece is in home, need a 6 to come out
   if (piece.state === 'home') {
-    return diceValue === 6;
+    if (diceValue !== 6) return false;
+    const startOccupied = player.pieces.some(
+      p => p.index !== pieceIndex && p.state === 'active' && p.steps === 1
+    );
+    return !startOccupied;
   }
   
   // Check if the move would exceed the home
@@ -203,14 +207,15 @@ export function executeMove(state: GameState, playerIndex: number, pieceIndex: n
     piece.steps = 1;
     
     // Check for capture at start position
-    const captured = checkAndCapture(state, player, piece);
+    const captures = checkAndCapture(state, player, piece);
     
     return {
       success: true,
       pieceIndex,
       fromSteps: 0,
       toSteps: 1,
-      captured,
+      captures,
+      captured: captures[0],
       enteredBoard: true,
       extraTurn: true, // 6 gives extra turn
     };
@@ -247,9 +252,9 @@ export function executeMove(state: GameState, playerIndex: number, pieceIndex: n
   }
   
   // Check for capture (only on common path, not in home column)
-  let captured = null;
+  let captures: CapturedPiece[] = [];
   if (newSteps >= 1 && newSteps <= 51) {
-    captured = checkAndCapture(state, player, piece);
+    captures = checkAndCapture(state, player, piece);
   }
   
   return {
@@ -257,20 +262,22 @@ export function executeMove(state: GameState, playerIndex: number, pieceIndex: n
     pieceIndex,
     fromSteps,
     toSteps: newSteps,
-    captured,
-    extraTurn: diceValue === 6,
+    captures,
+    captured: captures[0],
+    extraTurn: diceValue === 6 || captures.length > 0,
   };
 }
 
 // Check if a piece captures any opponent pieces at its position
-function checkAndCapture(state: GameState, movingPlayer: Player, movingPiece: Piece): { color: PlayerColor; pieceIndex: number } | null {
-  if (movingPiece.steps < 1 || movingPiece.steps > 51) return null;
+function checkAndCapture(state: GameState, movingPlayer: Player, movingPiece: Piece): CapturedPiece[] {
+  if (movingPiece.steps < 1 || movingPiece.steps > 51) return [];
   
   const pathIndex = getMainPathIndex(movingPlayer.color, movingPiece.steps);
   
   // Can't capture on safe zones
-  if (isSafeZone(pathIndex)) return null;
+  if (isSafeZone(pathIndex)) return [];
   
+  const captured: CapturedPiece[] = [];
   for (const opponent of state.players) {
     if (opponent.color === movingPlayer.color) continue;
     
@@ -280,15 +287,41 @@ function checkAndCapture(state: GameState, movingPlayer: Player, movingPiece: Pi
       
       const opponentPathIndex = getMainPathIndex(opponent.color, piece.steps);
       if (opponentPathIndex === pathIndex) {
-        // Capture!
         piece.state = 'home';
         piece.steps = 0;
-        return { color: opponent.color, pieceIndex: piece.index };
+        captured.push({ color: opponent.color, pieceIndex: piece.index });
       }
     }
   }
   
-  return null;
+  return captured;
+}
+
+function applyTripleSixPenalty(state: GameState, playerIndex: number): void {
+  const player = state.players[playerIndex];
+  if (!player) return;
+
+  for (let i = state.turnHistory.length - 1; i >= 0; i--) {
+    const record = state.turnHistory[i];
+    if (record.playerId !== player.id || record.pieceIndex < 0) continue;
+    const piece = player.pieces[record.pieceIndex];
+    if (piece?.state === 'active') {
+      piece.state = 'home';
+      piece.steps = 0;
+      return;
+    }
+  }
+
+  let furthest: Piece | null = null;
+  for (const piece of player.pieces) {
+    if (piece.state === 'active' && (!furthest || piece.steps > furthest.steps)) {
+      furthest = piece;
+    }
+  }
+  if (furthest) {
+    furthest.state = 'home';
+    furthest.steps = 0;
+  }
 }
 
 // Advance to next player's turn
@@ -304,28 +337,16 @@ export function nextTurn(state: GameState, hadExtraTurn: boolean = false): void 
   
   // Check for 3 consecutive sixes - penalize
   if (state.consecutiveSixes >= 3) {
-    const player = state.players[state.currentPlayerIndex];
-    if (player) {
-      // Move the last moved piece back to home (penalty for 3 sixes)
-      // Find the piece that moved most recently
-      const lastRecord = state.turnHistory[state.turnHistory.length - 1];
-      if (lastRecord && lastRecord.playerId === player.id) {
-        const piece = player.pieces[lastRecord.pieceIndex];
-        if (piece && piece.state === 'active') {
-          piece.state = 'home';
-          piece.steps = 0;
-        }
-      }
-    }
+    applyTripleSixPenalty(state, state.currentPlayerIndex);
     state.consecutiveSixes = 0;
   }
   
-  // Move to next player (skip disconnected players)
+  // Move to next player (skip disconnected humans; bots always play)
   let nextIndex = (state.currentPlayerIndex + 1) % state.players.length;
   let attempts = 0;
   while (attempts < state.players.length) {
     const nextPlayer = state.players[nextIndex];
-    if (nextPlayer && nextPlayer.isConnected) break;
+    if (nextPlayer && (nextPlayer.isConnected || nextPlayer.isBot)) break;
     nextIndex = (nextIndex + 1) % state.players.length;
     attempts++;
   }
@@ -345,7 +366,8 @@ export function recordTurn(
   pieceIndex: number, 
   fromSteps: number, 
   toSteps: number, 
-  captured: { color: PlayerColor; pieceIndex: number } | null
+  captured: CapturedPiece | null,
+  captures?: CapturedPiece[],
 ): void {
   state.turnHistory.push({
     playerId,
@@ -355,6 +377,7 @@ export function recordTurn(
     fromSteps,
     toSteps,
     captured,
+    captures: captures ?? (captured ? [captured] : []),
     timestamp: Date.now(),
   });
 }

@@ -419,7 +419,7 @@ export default function LudoBoard({
   );
 
   return (
-    <div className="w-full mx-auto select-none" style={{ maxWidth: 'min(85vw, 82dvh, 680px)' }}>
+    <div className="w-full h-full max-h-[min(calc(100dvh-220px),720px)] mx-auto select-none touch-manipulation" style={{ maxWidth: 'min(98vw, 720px)' }}>
       {/* Premium outer frame */}
       <div
         className="rounded-2xl p-1 sm:p-[7px]"
@@ -477,20 +477,19 @@ export default function LudoBoard({
             {pieces.map((p) => {
               const stacked = p.stackTotal > 1;
               const offset = stacked ? STACK_OFFSETS[p.stackIdx] ?? { x: 0, y: 0 } : { x: 0, y: 0 };
-              const size = stacked ? '55%' : '72%';
+              const size = stacked ? '58%' : '82%';
               const hex = PLAYER_COLOR_HEX[p.color];
               const dark = PLAYER_COLOR_DARK[p.color];
 
               return (
                 <motion.div
                   key={p.id}
-                  layout
                   style={{
                     gridRow: p.row + 1,
                     gridColumn: p.col + 1,
                     pointerEvents: p.isValid ? 'auto' : 'none',
                   }}
-                  className="flex items-center justify-center relative"
+                  className={`flex items-center justify-center relative ${p.isValid ? 'min-w-[44px] min-h-[44px]' : ''}`}
                   transition={{ type: 'spring', stiffness: 360, damping: 26, mass: 0.8 }}
                 >
                   {/* Drop shadow */}
@@ -506,10 +505,12 @@ export default function LudoBoard({
 
                   {/* Piece body — colored circle, NO number */}
                   <motion.div
-                    className="relative rounded-full shrink-0"
+                    className="relative rounded-full shrink-0 touch-manipulation"
                     style={{
                       width: size,
                       height: size,
+                      minWidth: p.isValid ? 44 : undefined,
+                      minHeight: p.isValid ? 44 : undefined,
                       transform: `translate(${offset.x}px, ${offset.y}px)`,
                       cursor: p.isValid ? 'pointer' : 'default',
                       background: `radial-gradient(circle at 36% 28%, ${hex}ff 0%, ${hex}dd 45%, ${dark} 100%)`,
@@ -521,19 +522,14 @@ export default function LudoBoard({
                     animate={
                       p.isValid
                         ? {
-                            boxShadow: [
-                              `0 3px 8px rgba(0,0,0,0.30), 0 0 14px ${hex}90, inset 0 2px 4px rgba(255,255,255,0.40), inset 0 -2px 4px rgba(0,0,0,0.12)`,
-                              `0 3px 8px rgba(0,0,0,0.30), 0 0 24px ${hex}, inset 0 2px 4px rgba(255,255,255,0.40), inset 0 -2px 4px rgba(0,0,0,0.12)`,
-                              `0 3px 8px rgba(0,0,0,0.30), 0 0 14px ${hex}90, inset 0 2px 4px rgba(255,255,255,0.40), inset 0 -2px 4px rgba(0,0,0,0.12)`,
-                            ],
-                            scale: [1, 1.1, 1],
+                            scale: [1, 1.08, 1],
                           }
                         : undefined
                     }
                     transition={
                       p.isValid
-                        ? { repeat: Infinity, duration: 1.2, ease: 'easeInOut' as const }
-                        : undefined
+                        ? { repeat: 2, duration: 0.9, ease: 'easeInOut' as const }
+                        : { type: 'spring', stiffness: 360, damping: 26, mass: 0.8 }
                     }
                     onClick={() => {
                       if (p.isValid) onPieceClick(p.color, p.pieceIndex);

@@ -9,19 +9,17 @@ import { Separator } from '@/components/ui/separator';
 import { Crown, Bot, Wifi, WifiOff, Home, ArrowRight, Star, Users } from 'lucide-react';
 
 export default function PlayerPanel() {
-  const {
-    gameState,
-    roomPlayers,
-    currentPlayerIndex,
-    isMyTurn,
-    lastAction,
-    winner,
-    playerColor: myColor,
-    playerId,
-    hostId,
-  } = useLudoStore();
+  const gameState = useLudoStore((s) => s.gameState);
+  const roomPlayers = useLudoStore((s) => s.roomPlayers);
+  const isMyTurn = useLudoStore((s) => s.isMyTurn);
+  const lastAction = useLudoStore((s) => s.lastAction);
+  const winner = useLudoStore((s) => s.winner);
+  const myColor = useLudoStore((s) => s.playerColor);
+  const playerId = useLudoStore((s) => s.playerId);
+  const hostId = useLudoStore((s) => s.hostId);
 
   const players = gameState?.players || [];
+  const currentPlayerIndex = gameState?.currentPlayerIndex ?? 0;
 
   const getProgress = (color: PlayerColor): number => {
     const player = players.find(p => p.color === color);

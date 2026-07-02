@@ -39,7 +39,7 @@ export default function GameChat() {
       {/* Chat Toggle Button */}
       <motion.button
         onClick={() => { setIsOpen(!isOpen); setUnread(0); }}
-        className="fixed bottom-4 right-4 z-30 w-12 h-12 rounded-full bg-white shadow-lg border border-gray-200 flex items-center justify-center hover:bg-gray-50 transition-colors lg:hidden"
+        className="fixed bottom-[4.5rem] right-3 z-30 w-12 h-12 rounded-full bg-white shadow-lg border border-gray-200 flex items-center justify-center hover:bg-gray-50 transition-colors lg:hidden safe-area-bottom"
         whileTap={{ scale: 0.9 }}
       >
         {isOpen ? <X className="w-5 h-5 text-gray-500" /> : (
